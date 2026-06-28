@@ -715,21 +715,29 @@
   <div class="modal">
     <div class="modal-title">🚛 <span id="transportModalTitle">Novi prijevoz</span></div>
 
-    <!-- SCAN ZONE -->
-    <div class="scan-zone">
-      <input type="file" id="scanInput" accept="image/*" onchange="handleScan(event)">
-      <div class="scan-icon">📷</div>
-      <div class="scan-label">Skeniraj teretni list <span>· Fotografiraj ili učitaj sliku</span></div>
-    </div>
+    <!-- DOKUMENT -->
+    <div style="margin-bottom:14px;">
+      <div style="font-size:12px;color:var(--text2);font-weight:600;margin-bottom:8px;">PRILOŽENI DOKUMENT</div>
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <button type="button" class="btn btn-secondary" style="flex:1" onclick="document.getElementById('scanInputImg').click()">🖼 Dodaj sliku</button>
+        <button type="button" class="btn btn-secondary" style="flex:1" onclick="document.getElementById('scanInputPdf').click()">📄 Dodaj PDF</button>
+      </div>
+      <input type="file" id="scanInputImg" accept="image/*" style="display:none" onchange="handleScan(event,'image')">
+      <input type="file" id="scanInputPdf" accept="application/pdf" style="display:none" onchange="handleScan(event,'pdf')">
 
-    <div class="scan-preview" id="scanPreview">
-      <img id="scanImg" src="" alt="Skenirana slika">
-      <div class="scan-preview-label">Učitana slika teretnog lista</div>
-    </div>
+      <div class="scan-preview" id="scanPreview">
+        <img id="scanImg" src="" alt="Skenirana slika">
+        <div class="scan-preview-label" id="scanPreviewLabel">Učitana slika teretnog lista</div>
+      </div>
 
-    <div class="scan-status" id="scanStatus">
-      <div class="spinner" id="scanSpinner"></div>
-      <span id="scanStatusText">AI čita teretni list...</span>
+      <div class="scan-status" id="scanStatus">
+        <div class="spinner" id="scanSpinner"></div>
+        <span id="scanStatusText">AI čita teretni list...</span>
+      </div>
+
+      <div id="docAttached" style="display:none;font-size:12px;color:var(--green);padding:6px 10px;background:rgba(52,211,153,0.1);border-radius:7px;border:1px solid rgba(52,211,153,0.2);">
+        ✓ <span id="docAttachedName">Dokument priložen</span>
+      </div>
     </div>
 
     <div style="border-top:1px solid var(--border);margin-bottom:14px;padding-top:14px;font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:0.6px;font-weight:600;">Podaci prijevoza</div>
@@ -1250,7 +1258,10 @@ async function openTransportModal(idx = null) {
 
   document.getElementById('scanPreview').style.display = 'none';
   document.getElementById('scanStatus').className = 'scan-status';
-  document.getElementById('scanInput').value = '';
+  document.getElementById('scanInputImg').value = '';
+  document.getElementById('scanInputPdf').value = '';
+  document.getElementById('docAttached').style.display = 'none';
+  docAttached = false;
   document.getElementById('transportModal').classList.add('open');
 }
 
@@ -1261,12 +1272,28 @@ function prefillDriver() {
   }
 }
 
+let docAttached = false;
+
 // ─── AI SCAN ───
-async function handleScan(event) {
+async function handleScan(event, type) {
   const file = event.target.files[0];
   if (!file) return;
 
-  // Show preview
+  docAttached = true;
+  document.getElementById('docAttached').style.display = 'block';
+  document.getElementById('docAttachedName').textContent = file.name;
+
+  // PDF — samo priloži, ne čitaj AI-em
+  if (type === 'pdf') {
+    document.getElementById('scanPreview').style.display = 'none';
+    document.getElementById('scanStatus').className = 'scan-status show success';
+    document.getElementById('scanSpinner').style.display = 'none';
+    document.getElementById('scanStatusText').textContent = '✓ PDF priložen – unesi podatke ručno';
+    event.target.value = '';
+    return;
+  }
+
+  // Slika — prikaži preview i čitaj AI-em
   const reader = new FileReader();
   reader.onload = (e) => {
     document.getElementById('scanImg').src = e.target.result;
@@ -1274,7 +1301,6 @@ async function handleScan(event) {
   };
   reader.readAsDataURL(file);
 
-  // Show loading
   const status = document.getElementById('scanStatus');
   const statusText = document.getElementById('scanStatusText');
   const spinner = document.getElementById('scanSpinner');
@@ -1283,7 +1309,6 @@ async function handleScan(event) {
   statusText.textContent = 'AI čita teretni list...';
 
   try {
-    // Convert to base64
     const base64 = await new Promise((resolve, reject) => {
       const r = new FileReader();
       r.onload = () => resolve(r.result.split(',')[1]);
@@ -1302,23 +1327,16 @@ async function handleScan(event) {
         messages: [{
           role: 'user',
           content: [
-            {
-              type: 'image',
-              source: { type: 'base64', media_type: mediaType, data: base64 }
-            },
-            {
-              type: 'text',
-              text: `Ovo je slika prijevoznog teretnog lista (CMR ili sličan dokument). Izvuci sljedeće podatke i vrati SAMO JSON bez ikakvih objašnjenja ili markdown backtickova:
+            { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+            { type: 'text', text: `Ovo je slika prijevoznog teretnog lista (CMR ili sličan dokument). Izvuci sljedeće podatke i vrati SAMO JSON bez ikakvih objašnjenja ili markdown backtickova:
 {
   "from": "mjesto polazišta (grad/adresa pošiljatelja)",
   "to": "mjesto odredišta (grad/adresa primatelja)",
-  "cargo": "opis tereta (vrsta robe, količina, težina ako postoji)",
   "driver": "ime vozača ako je vidljivo, inače prazan string",
   "datetime": "datum ako postoji u formatu YYYY-MM-DD, inače prazan string",
   "ptl": "broj teretnog lista ili otpremnice ako je vidljiv, inače prazan string"
 }
-Ako neki podatak nije vidljiv, ostavi prazan string. Vrati SAMO JSON.`
-            }
+Ako neki podatak nije vidljiv, ostavi prazan string. Vrati SAMO JSON.` }
           ]
         }]
       })
@@ -1329,14 +1347,11 @@ Ako neki podatak nije vidljiv, ostavi prazan string. Vrati SAMO JSON.`
     const clean = raw.replace(/```json|```/g, '').trim();
     const parsed = JSON.parse(clean);
 
-    // Fill form
-    if (parsed.from) { document.getElementById('fFrom').value = parsed.from; }
-    if (parsed.to) { document.getElementById('fTo').value = parsed.to; }
     if (parsed.driver) document.getElementById('fDriver').value = parsed.driver;
     if (parsed.datetime) document.getElementById('fDatetime').value = parsed.datetime;
     if (parsed.ptl) document.getElementById('fPtl').value = parsed.ptl;
 
-    const filled = [parsed.from, parsed.to, parsed.ptl].filter(Boolean).length;
+    const filled = [parsed.driver, parsed.datetime, parsed.ptl].filter(Boolean).length;
     spinner.style.display = 'none';
     status.className = 'scan-status show success';
     statusText.textContent = `✓ Pronađeno ${filled} polja – provjeri i dopuni po potrebi`;
@@ -1345,10 +1360,8 @@ Ako neki podatak nije vidljiv, ostavi prazan string. Vrati SAMO JSON.`
     spinner.style.display = 'none';
     status.className = 'scan-status show error';
     statusText.textContent = '✗ Nije uspjelo čitanje – unesi podatke ručno';
-    console.error(err);
   }
 
-  // Reset input so same file can be re-selected
   event.target.value = '';
 }
 
@@ -1377,6 +1390,12 @@ async function saveTransport() {
     err.textContent = 'Ispuni datum i odredište.';
     err.style.display = 'block';
     return;
+  }
+
+  // Upozorenje ako nema dokumenta
+  if (!docAttached) {
+    const potvrda = confirm('⚠️ Niste priložili Prijevozni teretni list.\n\nŽelite li svejedno nastaviti?');
+    if (!potvrda) return;
   }
 
   closeTransportModal();
