@@ -903,7 +903,7 @@ const PALETTE = [
 ];
 
 // ─── GOOGLE SHEETS BACKEND ───
-const API_URL = 'https://script.google.com/macros/s/AKfycbw1CHY6R_iQ2ZlYw7U-wIu4O4N0I7HhK3agp1j_gmUW6_ZOjusiyt7aCn07_bLnd86E/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbwt0n05pTXdk80RLm8D0mXqbtAvASsIKnkWJTUWYn7sjbi--AyO9f8oAcI_2MAf5aa9/exec';
 
 async function api(action, body = {}) {
   const url = `${API_URL}?action=${action}`;
@@ -1221,6 +1221,7 @@ function renderTable() {
       </td>` : ''}
       <td>
         <div style="display:flex;gap:5px">
+          ${t.docUrl ? `<button class="btn btn-secondary btn-sm" onclick="window.open('${t.docUrl}','_blank')" title="Otvori dokument">📄</button>` : ''}
           <button class="btn btn-secondary btn-sm" onclick="openTransportModal(${origIdx})">✏️</button>
           <button class="btn btn-danger btn-sm" onclick="deleteTransport(${origIdx})">🗑</button>
         </div>
@@ -1286,6 +1287,7 @@ async function openTransportModal(idx = null) {
   document.getElementById('docAttached').style.display = 'none';
   docAttached = false;
   docPdfBlob = null;
+  docDriveUrl = null;
   document.getElementById('transportModal').classList.add('open');
 }
 
@@ -1298,6 +1300,115 @@ function prefillDriver() {
 
 let docAttached = false;
 let docPdfBlob = null;
+let docDriveUrl = null;
+
+// ─── AI SCAN ───
+async function handleScan(event, type) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const status = document.getElementById('scanStatus');
+  const statusText = document.getElementById('scanStatusText');
+  const spinner = document.getElementById('scanSpinner');
+  status.className = 'scan-status show';
+  spinner.style.display = 'block';
+  statusText.textContent = 'Učitavanje dokumenta...';
+
+  // Prikaži preview
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    document.getElementById('scanImg').src = e.target.result;
+    document.getElementById('scanPreview').style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+
+  try {
+    // Pretvori u base64
+    const base64Full = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+    const base64 = base64Full.split(',')[1];
+    const mediaType = file.type || 'image/jpeg';
+
+    // Pretvori sliku u PDF
+    statusText.textContent = 'Pretvaranje u PDF...';
+    const img = await new Promise((resolve) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.src = base64Full;
+    });
+    const { jsPDF } = window.jspdf;
+    const isLandscape = img.width > img.height;
+    const pdf = new jsPDF({ orientation: isLandscape ? 'landscape' : 'portrait', unit: 'mm', format: 'a4' });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const ratio = Math.min(pageW / img.width, pageH / img.height);
+    const w = img.width * ratio;
+    const h = img.height * ratio;
+    pdf.addImage(base64Full, 'JPEG', (pageW - w) / 2, (pageH - h) / 2, w, h);
+    docPdfBlob = pdf.output('blob');
+    const pdfBase64 = pdf.output('datauristring').split(',')[1];
+
+    // Spremi PDF na Google Drive
+    statusText.textContent = 'Spremanje na Google Drive...';
+    const ptl = document.getElementById('fPtl').value.trim();
+    const filename = (ptl ? `PTL-${ptl}` : `dokument-${Date.now()}`) + '.pdf';
+    const driveRes = await api('uploadDoc', { filename, base64: pdfBase64, mimeType: 'application/pdf' });
+    if (driveRes.url) {
+      docDriveUrl = driveRes.url;
+    }
+
+    // AI čita sliku
+    statusText.textContent = 'AI čita teretni list...';
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1000,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+            { type: 'text', text: `Ovo je slika prijevoznog teretnog lista. Izvuci podatke i vrati SAMO JSON:
+{
+  "driver": "ime vozača ili prazan string",
+  "datetime": "datum u formatu YYYY-MM-DD ili prazan string",
+  "ptl": "broj teretnog lista ili prazan string"
+}
+Vrati SAMO JSON.` }
+          ]
+        }]
+      })
+    });
+
+    const data = await response.json();
+    const raw = data.content?.map(c => c.text || '').join('') || '';
+    const parsed = JSON.parse(raw.replace(/```json|```/g, '').trim());
+
+    if (parsed.driver) document.getElementById('fDriver').value = parsed.driver;
+    if (parsed.datetime) document.getElementById('fDatetime').value = parsed.datetime;
+    if (parsed.ptl) document.getElementById('fPtl').value = parsed.ptl;
+
+    docAttached = true;
+    document.getElementById('docAttached').style.display = 'block';
+    document.getElementById('docAttachedName').textContent = filename;
+    spinner.style.display = 'none';
+    status.className = 'scan-status show success';
+    statusText.textContent = `✓ Spremljeno na Drive – AI pročitao dokument`;
+
+  } catch (err) {
+    spinner.style.display = 'none';
+    status.className = 'scan-status show error';
+    statusText.textContent = '✗ Greška – unesi podatke ručno';
+    console.error(err);
+  }
+
+  event.target.value = '';
+}
 
 // ─── AI SCAN ───
 async function handleScan(event, type) {
@@ -1538,6 +1649,7 @@ async function saveTransport() {
     povrat: document.getElementById('povratDa').classList.contains('active') ? 'da' : 'ne',
     povratOpis: document.getElementById('fPovratCars').value,
     note: document.getElementById('fNote').value.trim(),
+    docUrl: docDriveUrl || '',
   };
 
   const err = document.getElementById('formError');
