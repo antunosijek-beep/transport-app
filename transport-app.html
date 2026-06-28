@@ -716,17 +716,21 @@
       <input type="date" id="fDatetime">
     </div>
 
-    <!-- POLAZIŠTE / ODREDIŠTE s autocomplete -->
+    <!-- POLAZIŠTE / ODREDIŠTE -->
     <div class="form-grid">
-      <div class="form-row" style="position:relative">
+      <div class="form-row">
         <label class="form-label">Polazište</label>
-        <input type="text" id="fFrom" placeholder="npr. Zagreb" autocomplete="off" oninput="showSuggestions('fFrom','sugFrom')" onblur="hideSuggestions('sugFrom')">
-        <div class="suggestions" id="sugFrom"></div>
+        <div style="display:flex;gap:6px">
+          <select id="fFrom" style="flex:1"></select>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="addNewLocation('from')" title="Dodaj novo">＋</button>
+        </div>
       </div>
-      <div class="form-row" style="position:relative">
+      <div class="form-row">
         <label class="form-label">Odredište</label>
-        <input type="text" id="fTo" placeholder="npr. Split" autocomplete="off" oninput="showSuggestions('fTo','sugTo')" onblur="hideSuggestions('sugTo')">
-        <div class="suggestions" id="sugTo"></div>
+        <div style="display:flex;gap:6px">
+          <select id="fTo" style="flex:1"></select>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="addNewLocation('to')" title="Dodaj novo">＋</button>
+        </div>
       </div>
     </div>
 
@@ -845,7 +849,7 @@ const PALETTE = [
 ];
 
 // ─── GOOGLE SHEETS BACKEND ───
-const API_URL = 'https://script.google.com/macros/s/AKfycbzw06n1FWjJ9yIyTPGJ-ajYd0cFl18TtIXCTEZJjYHjdHh8ceVuUwZ_Aa5E2QfoyoO8/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbw1CHY6R_iQ2ZlYw7U-wIu4O4N0I7HhK3agp1j_gmUW6_ZOjusiyt7aCn07_bLnd86E/exec';
 
 async function api(action, body = {}) {
   const url = `${API_URL}?action=${action}`;
@@ -859,6 +863,7 @@ async function api(action, body = {}) {
 // ─── STATE ───
 let trucks = [];
 let transports = [];
+let locations = { from: [], to: [] };
 let currentUser = null;
 let editTransportIdx = null;
 
@@ -879,6 +884,13 @@ async function loadTrucks() {
 async function loadTransports(truckId = null) {
   const res = await api('getTransports', truckId ? { truckId } : {});
   transports = res.transports || [];
+}
+
+async function loadLocations() {
+  const res = await api('getLocations');
+  const all = res.locations || [];
+  locations.from = all.filter(l => l.type === 'from').map(l => l.name);
+  locations.to = all.filter(l => l.type === 'to').map(l => l.name);
 }
 
 // ─── LOGIN ───
@@ -1137,10 +1149,15 @@ function renderTable() {
 }
 
 // ─── TRANSPORT MODAL ───
-function openTransportModal(idx = null) {
+async function openTransportModal(idx = null) {
   editTransportIdx = idx;
   document.getElementById('transportModalTitle').textContent = idx !== null ? 'Uredi prijevoz' : 'Novi prijevoz';
   document.getElementById('formError').style.display = 'none';
+
+  // Load locations
+  showLoading('Učitavanje...');
+  await loadLocations();
+  hideLoading();
 
   // Build truck select
   const sel = document.getElementById('fTruck');
@@ -1156,8 +1173,7 @@ function openTransportModal(idx = null) {
   if (idx !== null) {
     const t = transports[idx];
     document.getElementById('fDatetime').value = toDateInput(t.datetime);
-    document.getElementById('fFrom').value = t.from || '';
-    document.getElementById('fTo').value = t.to || '';
+    buildLocationSelects(t.from || '', t.to || '');
     document.getElementById('fPtl').value = t.ptl || '';
     document.getElementById('fNote').value = t.note || '';
     sel.value = t.truckId;
@@ -1167,8 +1183,7 @@ function openTransportModal(idx = null) {
     setNaplacen(t.naplacen === 'da');
   } else {
     document.getElementById('fDatetime').value = new Date().toISOString().split('T')[0];
-    document.getElementById('fFrom').value = '';
-    document.getElementById('fTo').value = '';
+    buildLocationSelects('', '');
     document.getElementById('fPtl').value = '';
     document.getElementById('fNote').value = '';
     sel.value = currentUser !== 'main' ? currentUser : (trucks[0] ? trucks[0].id : '');
@@ -1307,8 +1322,8 @@ async function saveTransport() {
   };
 
   const err = document.getElementById('formError');
-  if (!t.datetime || !t.from || !t.to) {
-    err.textContent = 'Ispuni datum, polazište i odredište.';
+  if (!t.datetime || !t.to) {
+    err.textContent = 'Ispuni datum i odredište.';
     err.style.display = 'block';
     return;
   }
@@ -1457,39 +1472,35 @@ function renderStats() {
   }).join('');
 }
 
-// ─── LOCATIONS (autocomplete) ───
-function getLocations() {
-  return JSON.parse(localStorage.getItem('tp_locations') || '[]');
+// ─── LOCATIONS ───
+function buildLocationSelects(fromVal = '', toVal = '') {
+  const fFrom = document.getElementById('fFrom');
+  const fTo = document.getElementById('fTo');
+
+  fFrom.innerHTML = locations.from.map(l => `<option value="${l}" ${l===fromVal?'selected':''}>${l}</option>`).join('');
+  if (!fromVal && locations.from.length > 0) fFrom.value = locations.from[0];
+
+  fTo.innerHTML = `<option value="">– Odaberi –</option>` +
+    locations.to.map(l => `<option value="${l}" ${l===toVal?'selected':''}>${l}</option>`).join('');
+  if (toVal) fTo.value = toVal;
 }
-function saveLocation(loc) {
-  if (!loc) return;
-  const locs = getLocations();
-  if (!locs.includes(loc)) { locs.push(loc); localStorage.setItem('tp_locations', JSON.stringify(locs)); }
-}
-function showSuggestions(inputId, listId) {
-  const val = document.getElementById(inputId).value.toLowerCase().trim();
-  const list = document.getElementById(listId);
-  const locs = getLocations().filter(l => l.toLowerCase().includes(val));
-  if (!val && locs.length === 0) { list.classList.remove('open'); return; }
-  let html = locs.map(l => `<div class="suggestion-item" onmousedown="pickSuggestion('${inputId}','${listId}','${l.replace(/'/g,"\\'")}')"> ${l}</div>`).join('');
-  if (val && !locs.find(l => l.toLowerCase() === val)) {
-    const cur = document.getElementById(inputId).value.trim();
-    html += `<div class="suggestion-add" onmousedown="addLocation('${inputId}','${listId}')">＋ Dodaj "${cur}"</div>`;
-  }
-  list.innerHTML = html;
-  list.classList.toggle('open', html.length > 0);
-}
-function hideSuggestions(listId) {
-  setTimeout(() => document.getElementById(listId).classList.remove('open'), 150);
-}
-function pickSuggestion(inputId, listId, val) {
-  document.getElementById(inputId).value = val;
-  document.getElementById(listId).classList.remove('open');
-}
-function addLocation(inputId, listId) {
-  const val = document.getElementById(inputId).value.trim();
-  if (val) saveLocation(val);
-  document.getElementById(listId).classList.remove('open');
+
+async function addNewLocation(type) {
+  const label = type === 'from' ? 'polazište' : 'odredište';
+  const name = prompt(`Upiši novo ${label}:`);
+  if (!name || !name.trim()) return;
+  const trimmed = name.trim();
+  showLoading('Spremanje mjesta...');
+  try {
+    await api('saveLocation', { name: trimmed, type });
+    await loadLocations();
+    const curFrom = document.getElementById('fFrom').value;
+    const curTo = document.getElementById('fTo').value;
+    buildLocationSelects(curFrom, curTo);
+    if (type === 'from') document.getElementById('fFrom').value = trimmed;
+    if (type === 'to') document.getElementById('fTo').value = trimmed;
+  } catch(e) { alert('Greška pri dodavanju mjesta.'); }
+  hideLoading();
 }
 
 // ─── CAR PICKER ───
