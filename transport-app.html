@@ -738,7 +738,13 @@
       </div>
 
       <div id="docAttached" style="display:none;font-size:12px;color:var(--green);padding:6px 10px;background:rgba(52,211,153,0.1);border-radius:7px;border:1px solid rgba(52,211,153,0.2);">
-        ✓ <span id="docAttachedName">Dokument priložen</span>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <span>✓ <span id="docAttachedName">Dokument priložen</span></span>
+          <div style="display:flex;gap:6px;">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="previewDoc()">👁 Pregled</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="downloadPdf()">⬇ Preuzmi</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -868,6 +874,20 @@
       <button class="btn btn-secondary" onclick="closeTruckModal()">Odustani</button>
       <button class="btn btn-primary" id="truckSaveBtn" onclick="saveTruck()">Dodaj kamion</button>
     </div>
+  </div>
+</div>
+
+<!-- MODAL: PREGLED DOKUMENTA -->
+<div id="docPreviewModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.95);z-index:500;flex-direction:column;">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--surface);border-bottom:1px solid var(--border);">
+    <div style="font-weight:600;font-size:14px;">📄 Pregled dokumenta</div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-secondary btn-sm" onclick="downloadPdf()">⬇ Preuzmi</button>
+      <button class="btn btn-secondary btn-sm" onclick="closeDocPreview()">✕ Zatvori</button>
+    </div>
+  </div>
+  <div style="flex:1;overflow:auto;display:flex;align-items:flex-start;justify-content:center;padding:16px;">
+    <img id="docPreviewImg" src="" style="max-width:100%;border-radius:8px;touch-action:pinch-zoom;" alt="Dokument">
   </div>
 </div>
 
@@ -1475,6 +1495,29 @@ Ako neki podatak nije vidljiv, ostavi prazan string. Vrati SAMO JSON.` }
   }
 
   event.target.value = '';
+}
+
+function previewDoc() {
+  const imgSrc = document.getElementById('scanImg').src;
+  if (!imgSrc) { alert('Nema dokumenta za pregled.'); return; }
+  document.getElementById('docPreviewImg').src = imgSrc;
+  const modal = document.getElementById('docPreviewModal');
+  modal.style.display = 'flex';
+}
+
+function closeDocPreview() {
+  document.getElementById('docPreviewModal').style.display = 'none';
+}
+
+function downloadPdf() {
+  if (!docPdfBlob) { alert('Nema PDF-a za preuzimanje.'); return; }
+  const name = document.getElementById('docAttachedName').textContent || 'teretni-list.pdf';
+  const url = URL.createObjectURL(docPdfBlob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function closeTransportModal() {
