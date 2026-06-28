@@ -673,6 +673,14 @@
         </div>
         <div id="reportContent"></div>
       </div>
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px;margin-top:12px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
+          <div style="font-weight:700;font-size:16px;">🚛 Upravljanje kamionima</div>
+          <button class="btn btn-primary" onclick="openTruckModal()">＋ Dodaj kamion</button>
+        </div>
+        <div class="truck-manage-list" id="truckManageList"></div>
+      </div>
     </div>
 
   </div>
@@ -951,7 +959,7 @@ async function showTab(name) {
     const names = ['pregled','kamioni'];
     el.classList.toggle('active', names[i] === name);
   });
-  if (name === 'kamioni') { await refreshData(); renderReport(); }
+  if (name === 'kamioni') { await refreshData(); renderReport(); renderTruckManage(); }
   if (name === 'pregled') { await refreshData(); updateStats(); renderTruckCards(); renderTable(); }
 }
 
