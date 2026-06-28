@@ -952,7 +952,15 @@ async function login(userId) {
     document.getElementById('filterStatus').style.display = 'none';
   }
 
-  showTab('pregled');
+  // Prikaži pregled odmah s već učitanim podacima
+  ['pregled','kamioni'].forEach(t => {
+    document.getElementById('tab-' + t).style.display = t === 'pregled' ? '' : 'none';
+  });
+  document.querySelectorAll('.tab').forEach((el, i) => {
+    el.classList.toggle('active', i === 0);
+  });
+  updateStats();
+  renderTable();
 }
 
 function logout() {
