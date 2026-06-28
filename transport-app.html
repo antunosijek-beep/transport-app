@@ -959,7 +959,7 @@ async function showTab(name) {
     const names = ['pregled','kamioni'];
     el.classList.toggle('active', names[i] === name);
   });
-  if (name === 'kamioni') { await refreshData(); renderReport(); renderTruckManage(); }
+  if (name === 'kamioni') { await refreshData(); renderReport(); await loadTrucks(); renderTruckManage(); }
   if (name === 'pregled') { await refreshData(); updateStats(); renderTruckCards(); renderTable(); }
 }
 
