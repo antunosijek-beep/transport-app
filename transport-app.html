@@ -141,6 +141,25 @@
   }
   .btn-logout:hover { border-color: var(--red); color: var(--red); }
 
+  /* FONT CONTROLS */
+  .font-controls {
+    display: flex;
+    gap: 4px;
+  }
+  .font-controls button {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 8px;
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    transition: all 0.15s;
+  }
+  .font-controls button:hover { border-color: var(--accent); color: var(--accent); }
+
   /* MAIN */
   .main {
     max-width: 1200px;
@@ -609,6 +628,10 @@
   <header>
     <div class="logo">🚛 Transport<span>Pro</span></div>
     <div style="display:flex;align-items:center;gap:10px;">
+      <div class="font-controls">
+        <button onclick="changeFontSize(-1)" title="Manji font">A−</button>
+        <button onclick="changeFontSize(1)" title="Veći font">A+</button>
+      </div>
       <div class="who-badge">
         <span id="headerIcon"></span>
         <span class="who-name" id="headerName"></span>
@@ -892,6 +915,25 @@ async function loadLocations() {
   locations.from = all.filter(l => l.type === 'from').map(l => l.name);
   locations.to = all.filter(l => l.type === 'to').map(l => l.name);
 }
+
+// ─── FONT SIZE ───
+const FONT_MIN = 12;
+const FONT_MAX = 22;
+const FONT_DEFAULT = 14;
+
+function changeFontSize(delta) {
+  const current = parseInt(localStorage.getItem('tp_fontsize') || FONT_DEFAULT);
+  const next = Math.min(FONT_MAX, Math.max(FONT_MIN, current + delta));
+  localStorage.setItem('tp_fontsize', next);
+  applyFontSize(next);
+}
+
+function applyFontSize(size) {
+  document.body.style.fontSize = size + 'px';
+}
+
+// Primijeni pri učitavanju
+applyFontSize(parseInt(localStorage.getItem('tp_fontsize') || FONT_DEFAULT));
 
 // ─── LOGIN ───
 async function buildLogin() {
