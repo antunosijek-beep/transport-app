@@ -1287,8 +1287,8 @@ Ako neki podatak nije vidljiv, ostavi prazan string. Vrati SAMO JSON.`
     const parsed = JSON.parse(clean);
 
     // Fill form
-    if (parsed.from) { document.getElementById('fFrom').value = parsed.from; saveLocation(parsed.from); }
-    if (parsed.to) { document.getElementById('fTo').value = parsed.to; saveLocation(parsed.to); }
+    if (parsed.from) { document.getElementById('fFrom').value = parsed.from; }
+    if (parsed.to) { document.getElementById('fTo').value = parsed.to; }
     if (parsed.driver) document.getElementById('fDriver').value = parsed.driver;
     if (parsed.datetime) document.getElementById('fDatetime').value = parsed.datetime;
     if (parsed.ptl) document.getElementById('fPtl').value = parsed.ptl;
@@ -1335,10 +1335,6 @@ async function saveTransport() {
     err.style.display = 'block';
     return;
   }
-
-  // Save new locations
-  saveLocation(t.from);
-  saveLocation(t.to);
 
   closeTransportModal();
   showLoading('Spremanje...');
