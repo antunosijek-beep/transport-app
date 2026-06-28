@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TransportPro</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
 
@@ -719,10 +720,11 @@
     <div style="margin-bottom:14px;">
       <div style="font-size:12px;color:var(--text2);font-weight:600;margin-bottom:8px;">PRILOŽENI DOKUMENT</div>
       <div style="display:flex;gap:8px;margin-bottom:10px;">
-        <button type="button" class="btn btn-secondary" style="flex:1" onclick="document.getElementById('scanInputImg').click()">🖼 Dodaj sliku</button>
-        <button type="button" class="btn btn-secondary" style="flex:1" onclick="document.getElementById('scanInputPdf').click()">📄 Dodaj PDF</button>
+        <button type="button" class="btn btn-secondary" style="flex:1" onclick="document.getElementById('scanInputImg').click()">📷 Fotografiraj</button>
+        <button type="button" class="btn btn-secondary" style="flex:1" onclick="document.getElementById('scanInputGal').click()">🖼 Iz galerije</button>
       </div>
-      <input type="file" id="scanInputImg" accept="image/*" style="display:none" onchange="handleScan(event,'image')">
+      <input type="file" id="scanInputImg" accept="image/*" capture="environment" style="display:none" onchange="handleScan(event,'image')">
+      <input type="file" id="scanInputGal" accept="image/*" style="display:none" onchange="handleScan(event,'image')">
       <input type="file" id="scanInputPdf" accept="application/pdf" style="display:none" onchange="handleScan(event,'pdf')">
 
       <div class="scan-preview" id="scanPreview">
@@ -1259,9 +1261,11 @@ async function openTransportModal(idx = null) {
   document.getElementById('scanPreview').style.display = 'none';
   document.getElementById('scanStatus').className = 'scan-status';
   document.getElementById('scanInputImg').value = '';
+  document.getElementById('scanInputGal').value = '';
   document.getElementById('scanInputPdf').value = '';
   document.getElementById('docAttached').style.display = 'none';
   docAttached = false;
+  docPdfBlob = null;
   document.getElementById('transportModal').classList.add('open');
 }
 
@@ -1273,6 +1277,114 @@ function prefillDriver() {
 }
 
 let docAttached = false;
+let docPdfBlob = null;
+
+// ─── AI SCAN ───
+async function handleScan(event, type) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const status = document.getElementById('scanStatus');
+  const statusText = document.getElementById('scanStatusText');
+  const spinner = document.getElementById('scanSpinner');
+  status.className = 'scan-status show';
+  spinner.style.display = 'block';
+  statusText.textContent = 'Učitavanje dokumenta...';
+
+  // Prikaži preview slike
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    document.getElementById('scanImg').src = e.target.result;
+    document.getElementById('scanPreview').style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+
+  try {
+    // Pretvori sliku u PDF
+    statusText.textContent = 'Pretvaranje u PDF...';
+    const base64Img = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+
+    // Učitaj dimenzije slike
+    const img = await new Promise((resolve) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.src = base64Img;
+    });
+
+    // Napravi PDF
+    const { jsPDF } = window.jspdf;
+    const isLandscape = img.width > img.height;
+    const pdf = new jsPDF({ orientation: isLandscape ? 'landscape' : 'portrait', unit: 'mm', format: 'a4' });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const ratio = Math.min(pageW / img.width, pageH / img.height);
+    const w = img.width * ratio;
+    const h = img.height * ratio;
+    const x = (pageW - w) / 2;
+    const y = (pageH - h) / 2;
+    pdf.addImage(base64Img, 'JPEG', x, y, w, h);
+    docPdfBlob = pdf.output('blob');
+
+    statusText.textContent = 'AI čita teretni list...';
+
+    // Pošalji sliku AI-u za čitanje (AI ne čita PDF direktno, koristimo originalnu sliku)
+    const base64 = base64Img.split(',')[1];
+    const mediaType = file.type || 'image/jpeg';
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1000,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+            { type: 'text', text: `Ovo je slika prijevoznog teretnog lista (CMR ili sličan dokument). Izvuci sljedeće podatke i vrati SAMO JSON bez ikakvih objašnjenja ili markdown backtickova:
+{
+  "driver": "ime vozača ako je vidljivo, inače prazan string",
+  "datetime": "datum ako postoji u formatu YYYY-MM-DD, inače prazan string",
+  "ptl": "broj teretnog lista ili otpremnice ako je vidljiv, inače prazan string"
+}
+Ako neki podatak nije vidljiv, ostavi prazan string. Vrati SAMO JSON.` }
+          ]
+        }]
+      })
+    });
+
+    const data = await response.json();
+    const raw = data.content?.map(c => c.text || '').join('') || '';
+    const clean = raw.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(clean);
+
+    if (parsed.driver) document.getElementById('fDriver').value = parsed.driver;
+    if (parsed.datetime) document.getElementById('fDatetime').value = parsed.datetime;
+    if (parsed.ptl) document.getElementById('fPtl').value = parsed.ptl;
+
+    const filled = [parsed.driver, parsed.datetime, parsed.ptl].filter(Boolean).length;
+    spinner.style.display = 'none';
+    status.className = 'scan-status show success';
+    statusText.textContent = `✓ PDF kreiran, pronađeno ${filled} polja`;
+
+    docAttached = true;
+    document.getElementById('docAttached').style.display = 'block';
+    document.getElementById('docAttachedName').textContent = file.name.replace(/\.[^.]+$/, '') + '.pdf';
+
+  } catch (err) {
+    spinner.style.display = 'none';
+    status.className = 'scan-status show error';
+    statusText.textContent = '✗ Greška – unesi podatke ručno';
+    console.error(err);
+  }
+
+  event.target.value = '';
+}
 
 // ─── AI SCAN ───
 async function handleScan(event, type) {
