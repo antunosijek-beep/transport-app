@@ -923,11 +923,13 @@ async function login(userId) {
     document.getElementById('headerIcon').textContent = '⭐';
     document.getElementById('headerName').textContent = 'Glavni';
     document.getElementById('tabKamioni').style.display = '';
+    document.getElementById('filterStatus').style.display = '';
   } else {
     const truck = trucks.find(t => t.id === userId);
     document.getElementById('headerIcon').textContent = '🚛';
     document.getElementById('headerName').textContent = truck ? truck.name : '';
     document.getElementById('tabKamioni').style.display = 'none';
+    document.getElementById('filterStatus').style.display = 'none';
   }
 
   showTab('pregled');
