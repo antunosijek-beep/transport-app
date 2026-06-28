@@ -636,7 +636,7 @@
           <select id="filterTruck" onchange="renderTable()">
             <option value="">Svi kamioni</option>
           </select>
-          <select id="filterStatus" onchange="renderTable()">
+          <select id="filterStatus" onchange="renderTable()" style="display:none">
             <option value="">Svi</option>
             <option value="da">Naplaćeni</option>
             <option value="ne">Nenaplaćeni</option>
@@ -1081,7 +1081,7 @@ function renderTable() {
     <th></th>
   </tr>`;
 
-  // Show/hide naplacen filter
+  // Show/hide naplacen filter - samo za glavnog
   document.getElementById('filterStatus').style.display = isMain ? '' : 'none';
 
   rebuildTruckFilter();
