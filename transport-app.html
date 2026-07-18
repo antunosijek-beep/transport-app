@@ -903,7 +903,7 @@ const PALETTE = [
 ];
 
 // ─── GOOGLE SHEETS BACKEND ───
-const API_URL = 'https://script.google.com/macros/s/AKfycby2KRb9Se5KkTE8vlH5jh0U1qo2rb3XNMPyloBHBnV96UWmE7AcjUgOl1ENGt9Zcssm/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbxRNn6FVLhSC2wPMnXEynffm4NzZCiHNGtVc6xMBARqthq-aXpC2SVs9GcKDTB77xwk/exec';
 
 async function api(action, body = {}) {
   const url = `${API_URL}?action=${action}`;
@@ -1333,30 +1333,12 @@ async function handleScan(event, type) {
     const base64 = base64Full.split(',')[1];
     const mediaType = file.type || 'image/jpeg';
 
-    // Pretvori sliku u PDF
-    statusText.textContent = 'Pretvaranje u PDF...';
-    const img = await new Promise((resolve) => {
-      const i = new Image();
-      i.onload = () => resolve(i);
-      i.src = base64Full;
-    });
-    const { jsPDF } = window.jspdf;
-    const isLandscape = img.width > img.height;
-    const pdf = new jsPDF({ orientation: isLandscape ? 'landscape' : 'portrait', unit: 'mm', format: 'a4' });
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
-    const ratio = Math.min(pageW / img.width, pageH / img.height);
-    const w = img.width * ratio;
-    const h = img.height * ratio;
-    pdf.addImage(base64Full, 'JPEG', (pageW - w) / 2, (pageH - h) / 2, w, h);
-    docPdfBlob = pdf.output('blob');
-    const pdfBase64 = pdf.output('datauristring').split(',')[1];
-
-    // Spremi PDF na Google Drive
+    // Spremi sliku na Google Drive
     statusText.textContent = 'Spremanje na Google Drive...';
     const ptl = document.getElementById('fPtl').value.trim();
-    const filename = (ptl ? `PTL-${ptl}` : `dokument-${Date.now()}`) + '.pdf';
-    const driveRes = await api('uploadDoc', { filename, base64: pdfBase64, mimeType: 'application/pdf' });
+    const ext = file.name.split('.').pop() || 'jpg';
+    const filename = (ptl ? `PTL-${ptl}` : `dokument-${Date.now()}`) + '.' + ext;
+    const driveRes = await api('uploadDoc', { filename, base64, mimeType: mediaType });
     if (driveRes.url) {
       docDriveUrl = driveRes.url;
     }
@@ -1501,11 +1483,11 @@ Ako neki podatak nije vidljiv, ostavi prazan string. Vrati SAMO JSON.` }
     const filled = [parsed.driver, parsed.datetime, parsed.ptl].filter(Boolean).length;
     spinner.style.display = 'none';
     status.className = 'scan-status show success';
-    statusText.textContent = `✓ PDF kreiran, pronađeno ${filled} polja`;
+    statusText.textContent = `✓ Slika spremljena na Drive, pronađeno ${filled} polja`;
 
     docAttached = true;
     document.getElementById('docAttached').style.display = 'block';
-    document.getElementById('docAttachedName').textContent = file.name.replace(/\.[^.]+$/, '') + '.pdf';
+    document.getElementById('docAttachedName').textContent = filename;
 
   } catch (err) {
     spinner.style.display = 'none';
