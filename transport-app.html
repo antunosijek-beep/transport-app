@@ -1089,15 +1089,23 @@ function updateStats() {
   const vis = visibleTransports();
 
   if (currentUser === 'main') {
-    const ukupnoAuta = transports.reduce((s, t) => s + (parseInt(t.cars) || 0), 0);
-    const ukupnoPovrat = transports.filter(t => t.povrat === 'da').reduce((s, t) => s + (parseInt(t.povratOpis) || 0), 0);
+    const now = new Date();
+    const monthName = now.toLocaleDateString('hr-HR', { month: 'long' });
+    const thisMonth = transports.filter(t => {
+      const d = toDateInput(t.datetime);
+      if (!d) return false;
+      const dt = new Date(d);
+      return dt.getMonth() === now.getMonth() && dt.getFullYear() === now.getFullYear();
+    });
+    const ukupnoAuta = thisMonth.reduce((s, t) => s + (parseInt(t.cars) || 0), 0);
+    const ukupnoPovrat = thisMonth.filter(t => t.povrat === 'da').reduce((s, t) => s + (parseInt(t.povratOpis) || 0), 0);
     document.getElementById('statsGrid').style.gridTemplateColumns = 'repeat(3,1fr)';
     document.getElementById('statsGrid').innerHTML = `
       <div class="stat-card"><div class="stat-label">Ukupno prijevoza</div><div class="stat-value">${transports.length}</div><div class="stat-sub">svi kamioni</div></div>
       <div class="stat-card">
-        <div class="stat-label">Ukupno auta</div>
+        <div class="stat-label">Auta ovaj mjesec</div>
         <div class="stat-value" style="color:var(--accent)">${ukupnoAuta}</div>
-        <div class="stat-sub">${ukupnoPovrat > 0 ? `↩ Povrat: <strong style="color:var(--yellow)">${ukupnoPovrat}</strong>` : 'bez povrata'}</div>
+        <div class="stat-sub">${ukupnoPovrat > 0 ? `↩ Povrat: <strong style="color:var(--yellow)">${ukupnoPovrat}</strong> · ` : ''}${monthName}</div>
       </div>
       <div class="stat-card"><div class="stat-label">Kamiona</div><div class="stat-value">${trucks.length}</div><div class="stat-sub">registrirano</div></div>
     `;
