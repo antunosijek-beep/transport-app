@@ -606,6 +606,8 @@
   .naplacen-da:hover { background: rgba(52,211,153,0.28); }
   .naplacen-ne { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }
   .naplacen-ne:hover { border-color: var(--green); color: var(--green); }
+  .naplacen-problem { background: rgba(248,113,113,0.18); color: var(--red); }
+  .naplacen-problem:hover { background: rgba(248,113,113,0.3); }
 </style>
 </head>
 <body>
@@ -663,14 +665,33 @@
           </select>
           <select id="filterStatus" onchange="renderTable()" style="display:none">
             <option value="">Svi</option>
-            <option value="da">Naplaćeni</option>
-            <option value="ne">Nenaplaćeni</option>
+            <option value="ne">Nepregledani</option>
+            <option value="da">Ispravni</option>
+            <option value="problem">Sporni</option>
           </select>
         </div>
         <button class="btn btn-secondary" onclick="exportCSV()">⬇ CSV</button>
         <button class="btn btn-secondary" onclick="exportPDF()">⬇ PDF</button>
         <button class="btn btn-secondary" onclick="showTab('pregled')" title="Osvježi">🔄</button>
         <button class="btn btn-primary" onclick="openTransportModal()">＋ Novi prijevoz</button>
+      </div>
+
+      <!-- OBRAČUN / KONTROLA (samo Glavni) -->
+      <div id="obracunBar" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:14px;">
+        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+          <div>
+            <label class="form-label" style="margin-bottom:3px">Od datuma</label>
+            <input type="date" id="filterDateFrom" onchange="renderTable()">
+          </div>
+          <div>
+            <label class="form-label" style="margin-bottom:3px">Do datuma</label>
+            <input type="date" id="filterDateTo" onchange="renderTable()">
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="setPrethodniMjesec()">Prethodni mjesec</button>
+          <button class="btn btn-secondary btn-sm" onclick="setOvajMjesec()">Ovaj mjesec</button>
+          <button class="btn btn-secondary btn-sm" onclick="clearDateFilter()">Poništi</button>
+        </div>
+        <div id="obracunSummary" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);font-size:13px;color:var(--text2)"></div>
       </div>
 
       <div class="table-wrap">
@@ -1023,6 +1044,7 @@ async function login(userId) {
     document.getElementById('headerName').textContent = truck ? truck.name : '';
     document.getElementById('tabKamioni').style.display = 'none';
     document.getElementById('filterStatus').style.display = 'none';
+    document.getElementById('obracunBar').style.display = 'none';
   }
 
   // Prikaži pregled odmah s već učitanim podacima
@@ -1053,7 +1075,7 @@ async function showTab(name) {
     el.classList.toggle('active', names[i] === name);
   });
   if (name === 'kamioni') { await refreshData(); renderReport(); await loadTrucks(); renderTruckManage(); }
-  if (name === 'pregled') { await refreshData(); updateStats(); renderTruckCards(); renderTable(); }
+  if (name === 'pregled') { await refreshData(); updateStats(); renderTable(); }
 }
 
 async function refreshData() {
@@ -1076,12 +1098,69 @@ function getFiltered() {
   const q = document.getElementById('searchInput').value.toLowerCase();
   const ft = document.getElementById('filterTruck').value;
   const fs = document.getElementById('filterStatus').value;
+  const dFrom = document.getElementById('filterDateFrom').value;
+  const dTo = document.getElementById('filterDateTo').value;
   return visibleTransports().filter(t => {
-    const match = !q || (t.from||'').toLowerCase().includes(q) || (t.to||'').toLowerCase().includes(q) || (t.cargo||'').toLowerCase().includes(q) || (t.driver||'').toLowerCase().includes(q);
+    const match = !q || (t.from||'').toLowerCase().includes(q) || (t.to||'').toLowerCase().includes(q) || (t.ptl||'').toLowerCase().includes(q) || (t.driver||'').toLowerCase().includes(q);
     const matchT = !ft || t.truckId === ft;
-    const matchS = !fs || t.naplacen === fs;
-    return match && matchT && matchS;
+    const status = t.naplacen || 'ne';
+    const matchS = !fs || status === fs;
+    const d = toDateInput(t.datetime);
+    const matchFrom = !dFrom || (d && d >= dFrom);
+    const matchTo = !dTo || (d && d <= dTo);
+    return match && matchT && matchS && matchFrom && matchTo;
   });
+}
+
+// ─── OBRAČUN (raspon datuma) ───
+function setPrethodniMjesec() {
+  const now = new Date();
+  const prvi = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const zadnji = new Date(now.getFullYear(), now.getMonth(), 0);
+  document.getElementById('filterDateFrom').value = dateToStr(prvi);
+  document.getElementById('filterDateTo').value = dateToStr(zadnji);
+  renderTable();
+}
+
+function setOvajMjesec() {
+  const now = new Date();
+  const prvi = new Date(now.getFullYear(), now.getMonth(), 1);
+  const zadnji = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  document.getElementById('filterDateFrom').value = dateToStr(prvi);
+  document.getElementById('filterDateTo').value = dateToStr(zadnji);
+  renderTable();
+}
+
+function clearDateFilter() {
+  document.getElementById('filterDateFrom').value = '';
+  document.getElementById('filterDateTo').value = '';
+  document.getElementById('filterStatus').value = '';
+  renderTable();
+}
+
+function dateToStr(d) {
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
+function renderObracunSummary(data) {
+  const el = document.getElementById('obracunSummary');
+  if (!el) return;
+  const ok = data.filter(t => t.naplacen === 'da');
+  const problem = data.filter(t => t.naplacen === 'problem');
+  const nepregledano = data.filter(t => (t.naplacen || 'ne') === 'ne');
+  const auta = data.reduce((s, t) => s + (parseInt(t.cars) || 0), 0);
+  const povrat = data.filter(t => t.povrat === 'da').reduce((s, t) => s + (parseInt(t.povratOpis) || 0), 0);
+  el.innerHTML = `
+    <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;">
+      <span>Prijevoza: <strong style="color:var(--text)">${data.length}</strong></span>
+      <span>Auta: <strong style="color:var(--accent)">${auta}</strong></span>
+      <span>Povrat: <strong style="color:var(--yellow)">${povrat}</strong></span>
+      <span>✓ Ispravno: <strong style="color:var(--green)">${ok.length}</strong></span>
+      <span>✗ Sporno: <strong style="color:var(--red)">${problem.length}</strong></span>
+      <span>– Nepregledano: <strong style="color:var(--text)">${nepregledano.length}</strong></span>
+    </div>`;
 }
 
 // ─── STATS ───
@@ -1133,35 +1212,6 @@ function updateStats() {
 }
 
 // ─── TRUCK STATUS CARDS ───
-function renderTruckCards() {
-  const container = document.getElementById('truckCards');
-
-  const trucksToShow = currentUser === 'main'
-    ? trucks
-    : trucks.filter(t => t.id === currentUser);
-
-  const cols = trucksToShow.length <= 2 ? `repeat(${trucksToShow.length},1fr)` : 'repeat(2,1fr)';
-  container.style.gridTemplateColumns = cols;
-
-  container.innerHTML = trucksToShow.map(truck => {
-    const p = PALETTE[truck.paletteIdx % PALETTE.length];
-    const myTransports = transports.filter(t => t.truckId === truck.id);
-    const hasActive = myTransports.some(t => t.status === 'U tijeku');
-    const statusLabel = hasActive ? 'U tijeku' : myTransports.length > 0 ? 'Slobodan' : 'Nema vožnji';
-    const statusClass = hasActive ? 'pill-busy' : 'pill-available';
-    const driverLabel = truck.driver || (myTransports.length > 0 ? myTransports[0].driver : 'Nije uneseno');
-
-    return `
-      <div class="truck-card">
-        <div class="truck-icon-box" style="background:${p.bg}">🚛</div>
-        <div class="truck-info">
-          <div class="truck-name" style="color:${p.color}">${truck.name}</div>
-          <div class="truck-driver">${driverLabel}</div>
-        </div>
-        <div class="truck-status-pill ${statusClass}">${statusLabel}</div>
-      </div>`;
-  }).join('');
-}
 
 // ─── TABLE ───
 function rebuildTruckFilter() {
@@ -1193,17 +1243,20 @@ function renderTable() {
     <th>Vozač</th>
     ${isMain ? '<th>Kamion</th>' : ''}
     <th>Povrat</th>
-    ${isMain ? '<th>Naplaćen</th>' : ''}
+    ${isMain ? '<th>Kontrola</th>' : ''}
     <th></th>
   </tr>`;
 
-  // Show/hide naplacen filter - samo za glavnog
+  // Show/hide naplacen filter i obračun traku - samo za glavnog
   document.getElementById('filterStatus').style.display = isMain ? '' : 'none';
+  document.getElementById('obracunBar').style.display = isMain ? '' : 'none';
 
   rebuildTruckFilter();
   const data = getFiltered();
   const tbody = document.getElementById('tbody');
   const empty = document.getElementById('emptyState');
+
+  if (isMain) renderObracunSummary(data);
 
   if (data.length === 0) {
     tbody.innerHTML = '';
@@ -1218,8 +1271,12 @@ function renderTable() {
     const p = truck ? PALETTE[(truck.paletteIdx || 0) % PALETTE.length] : PALETTE[0];
     const truckName = truck ? truck.name : t.truckId;
 
-    const isNaplacen = t.naplacen === 'da';
-    return `<tr>
+    const st = t.naplacen || 'ne';
+    const stLabel = st === 'da' ? '✓ Ispravan' : st === 'problem' ? '✗ Sporno' : '– Nije';
+    const stClass = st === 'da' ? 'naplacen-da' : st === 'problem' ? 'naplacen-problem' : 'naplacen-ne';
+    const rowBg = st === 'problem' ? 'background:rgba(248,113,113,0.07)' : st === 'da' ? 'background:rgba(52,211,153,0.05)' : '';
+
+    return `<tr style="${isMain ? rowBg : ''}">
       <td class="mono" style="white-space:nowrap">${fmt(t.datetime)}</td>
       <td class="mono">${t.ptl||'–'}</td>
       <td><strong>${t.from||''}</strong><span class="route-arrow">→</span><strong>${t.to||''}</strong></td>
@@ -1228,8 +1285,8 @@ function renderTable() {
       ${isMain ? `<td><span class="badge-truck" style="background:${p.bg};color:${p.color}">${truckName}</span></td>` : ''}
       <td>${t.povrat === 'da' ? `<span style="color:var(--yellow);font-weight:600">Da (${t.povratOpis || 1})</span>` : '<span style="color:var(--text2)">Ne</span>'}</td>
       ${isMain ? `<td>
-        <button onclick="toggleNaplacen(${origIdx})" class="naplacen-btn ${isNaplacen ? 'naplacen-da' : 'naplacen-ne'}">
-          ${isNaplacen ? '✓ Naplaćen' : '– Nije'}
+        <button onclick="toggleNaplacen(${origIdx})" class="naplacen-btn ${stClass}" title="Klikni za promjenu">
+          ${stLabel}
         </button>
       </td>` : ''}
       <td>
@@ -1506,7 +1563,6 @@ async function saveTransport() {
   hideLoading();
   renderTable();
   updateStats();
-  renderTruckCards();
 }
 
 async function deleteTransport(idx) {
@@ -1520,7 +1576,6 @@ async function deleteTransport(idx) {
   hideLoading();
   renderTable();
   updateStats();
-  renderTruckCards();
 }
 
 // ─── TRUCK MODAL ───
@@ -1572,7 +1627,6 @@ async function saveTruck() {
   } catch(e) { alert('Greška pri spremanju kamiona.'); }
   hideLoading();
   renderTruckManage();
-  renderTruckCards();
   updateStats();
 }
 
@@ -1590,7 +1644,6 @@ async function deleteTruck(id) {
   } catch(e) { alert('Greška pri brisanju kamiona.'); }
   hideLoading();
   renderTruckManage();
-  renderTruckCards();
   updateStats();
 }
 
@@ -1659,7 +1712,7 @@ function setCarPicker(val) {
   document.getElementById('fCars').value = val;
 }
 
-// ─── NAPLAĆEN ───
+// ─── KONTROLA (nepregledano / ispravan / sporno) ───
 function setNaplacen(isDa) {
   document.getElementById('naplacenDa').classList.toggle('active', isDa);
   document.getElementById('naplacenNe').classList.toggle('active', !isDa);
@@ -1667,7 +1720,9 @@ function setNaplacen(isDa) {
 
 async function toggleNaplacen(idx) {
   const t = transports[idx];
-  t.naplacen = t.naplacen === 'da' ? 'ne' : 'da';
+  const cur = t.naplacen || 'ne';
+  // Kruži: nepregledano → ispravan → sporno → nepregledano
+  t.naplacen = cur === 'ne' ? 'da' : cur === 'da' ? 'problem' : 'ne';
   showLoading('Spremanje...');
   try {
     await api('saveTransport', { transport: t });
@@ -1833,10 +1888,16 @@ function fmt(dt) {
 
 function exportCSV() {
   const data = getFiltered();
-  const rows = [['Datum','Polazište','Odredište','Teret','PTL','Auta','Vozač','Kamion','Povrat','Napomena','Status']];
+  const rows = [['Datum','Polazište','Odredište','PTL','Auta','Vozač','Kamion','Povrat','Kontrola','Napomena','Dokument']];
   data.forEach(t => {
     const truck = trucks.find(tr => tr.id === t.truckId);
-    rows.push([fmt(t.datetime), t.from, t.to, t.cargo, t.ptl||'', t.cars||'', t.driver, truck ? truck.name : t.truckId, t.povrat==='da'?'Da':'Ne', t.note||'', t.status]);
+    const st = t.naplacen === 'da' ? 'Ispravan' : t.naplacen === 'problem' ? 'Sporno' : 'Nepregledano';
+    rows.push([
+      fmt(t.datetime), t.from, t.to, t.ptl||'', t.cars||'', t.driver,
+      truck ? truck.name : t.truckId,
+      t.povrat==='da' ? 'Da (' + (t.povratOpis||1) + ')' : 'Ne',
+      st, t.note||'', t.docUrl||''
+    ]);
   });
   const csv = rows.map(r => r.map(c => `"${String(c||'').replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
@@ -1850,15 +1911,22 @@ function exportPDF() {
   const data = getFiltered();
   const rows = data.map(t => {
     const truck = trucks.find(tr => tr.id === t.truckId);
-    return `<tr><td>${fmt(t.datetime)}</td><td>${t.from||''} → ${t.to||''}</td><td>${t.cargo||'–'}</td><td>${t.driver||'–'}</td><td>${truck ? truck.name : ''}</td><td>${t.status}</td></tr>`;
+    const st = t.naplacen === 'da' ? 'Ispravan' : t.naplacen === 'problem' ? 'SPORNO' : '–';
+    return `<tr><td>${fmt(t.datetime)}</td><td>${t.ptl||'–'}</td><td>${t.from||''} → ${t.to||''}</td><td style="text-align:center">${t.cars||'0'}</td><td>${t.povrat==='da' ? 'Da ('+(t.povratOpis||1)+')' : 'Ne'}</td><td>${t.driver||'–'}</td><td>${truck ? truck.name : ''}</td><td>${st}</td></tr>`;
   }).join('');
+  const dFrom = document.getElementById('filterDateFrom').value;
+  const dTo = document.getElementById('filterDateTo').value;
+  const razdoblje = (dFrom || dTo) ? `Razdoblje: ${dFrom ? fmt(dFrom) : '...'} – ${dTo ? fmt(dTo) : '...'}` : '';
+  const ukAuta = data.reduce((s,t) => s + (parseInt(t.cars)||0), 0);
+  const ukPovrat = data.filter(t=>t.povrat==='da').reduce((s,t) => s + (parseInt(t.povratOpis)||0), 0);
   const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Prijevozi</title>
-    <style>body{font-family:Arial,sans-serif;font-size:12px;padding:20px}h2{margin-bottom:14px}
-    table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccc;padding:7px 10px;text-align:left}
+    <style>body{font-family:Arial,sans-serif;font-size:12px;padding:20px}h2{margin-bottom:8px}
+    table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccc;padding:6px 8px;text-align:left}
     th{background:#f0f0f0;font-weight:600}tr:nth-child(even){background:#f9f9f9}</style>
-    </head><body><h2>🚛 TransportPro – Prijevozi</h2>
-    <p style="margin-bottom:12px;color:#666">Izvezeno: ${new Date().toLocaleDateString('hr-HR')}</p>
-    <table><thead><tr><th>Datum</th><th>Ruta</th><th>Teret</th><th>Vozač</th><th>Kamion</th><th>Status</th></tr></thead>
+    </head><body><h2>TransportPro – Prijevozi</h2>
+    <p style="margin-bottom:4px;color:#666">${razdoblje}</p>
+    <p style="margin-bottom:12px;color:#666">Prijevoza: ${data.length} · Auta: ${ukAuta} · Povrat: ${ukPovrat} · Izvezeno: ${new Date().toLocaleDateString('hr-HR')}</p>
+    <table><thead><tr><th>Datum</th><th>PTL</th><th>Ruta</th><th>Auta</th><th>Povrat</th><th>Vozač</th><th>Kamion</th><th>Kontrola</th></tr></thead>
     <tbody>${rows}</tbody></table></body></html>`;
   const w = window.open('', '_blank');
   w.document.write(html);
