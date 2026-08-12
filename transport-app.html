@@ -1288,6 +1288,7 @@ async function openTransportModal(idx = null) {
   docAttached = false;
   docPdfBlob = null;
   docDriveUrl = null;
+  docImageDataUrl = null;
   document.getElementById('transportModal').classList.add('open');
 }
 
@@ -1301,6 +1302,35 @@ function prefillDriver() {
 let docAttached = false;
 let docPdfBlob = null;
 let docDriveUrl = null;
+let docImageDataUrl = null;
+
+// Smanji sliku na maxSide piksela i komprimiraj u JPEG
+function compressImage(file, maxSide, quality) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Ne mogu pročitati datoteku.'));
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Neispravna slika.'));
+      img.onload = () => {
+        let { width, height } = img;
+        const scale = Math.min(1, maxSide / Math.max(width, height));
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 // ─── AI SCAN ───
 async function handleScan(event, type) {
@@ -1323,272 +1353,81 @@ async function handleScan(event, type) {
   reader.readAsDataURL(file);
 
   try {
-    // Pretvori u base64
-    const base64Full = await new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => resolve(r.result);
-      r.onerror = reject;
-      r.readAsDataURL(file);
-    });
+    // Smanji i komprimiraj sliku (fotografije s mobitela su prevelike za slanje)
+    statusText.textContent = 'Priprema slike...';
+    const base64Full = await compressImage(file, 1600, 0.75);
     const base64 = base64Full.split(',')[1];
-    const mediaType = file.type || 'image/jpeg';
+    const mediaType = 'image/jpeg';
+    docImageDataUrl = base64Full;
+    document.getElementById('scanImg').src = base64Full;
+    document.getElementById('scanPreview').style.display = 'block';
 
     // Spremi sliku na Google Drive
     statusText.textContent = 'Spremanje na Google Drive...';
     const ptl = document.getElementById('fPtl').value.trim();
-    const ext = file.name.split('.').pop() || 'jpg';
-    const filename = (ptl ? `PTL-${ptl}` : `dokument-${Date.now()}`) + '.' + ext;
+    const filename = (ptl ? `PTL-${ptl}` : `dokument-${Date.now()}`) + '.jpg';
     const driveRes = await api('uploadDoc', { filename, base64, mimeType: mediaType });
-    if (driveRes.url) {
-      docDriveUrl = driveRes.url;
-    }
+    if (driveRes && driveRes.error) throw new Error('Drive: ' + driveRes.error);
+    if (!driveRes || !driveRes.url) throw new Error('Drive nije vratio link.');
+    docDriveUrl = driveRes.url;
 
-    // AI čita sliku
+    // Slika je spremljena – označi to odmah
+    docAttached = true;
+    document.getElementById('docAttached').style.display = 'block';
+    document.getElementById('docAttachedName').textContent = filename;
+
+    // AI čita sliku (ako zakaže, slika ostaje spremljena)
     statusText.textContent = 'AI čita teretni list...';
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 1000,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
-            { type: 'text', text: `Ovo je slika prijevoznog teretnog lista. Izvuci podatke i vrati SAMO JSON:
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 1000,
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+              { type: 'text', text: `Ovo je slika prijevoznog teretnog lista. Izvuci podatke i vrati SAMO JSON:
 {
   "driver": "ime vozača ili prazan string",
   "datetime": "datum u formatu YYYY-MM-DD ili prazan string",
   "ptl": "broj teretnog lista ili prazan string"
 }
 Vrati SAMO JSON.` }
-          ]
-        }]
-      })
-    });
+            ]
+          }]
+        })
+      });
 
-    const data = await response.json();
-    const raw = data.content?.map(c => c.text || '').join('') || '';
-    const parsed = JSON.parse(raw.replace(/```json|```/g, '').trim());
+      const data = await response.json();
+      const raw = data.content?.map(c => c.text || '').join('') || '';
+      const parsed = JSON.parse(raw.replace(/```json|```/g, '').trim());
 
-    if (parsed.driver) document.getElementById('fDriver').value = parsed.driver;
-    if (parsed.datetime) document.getElementById('fDatetime').value = parsed.datetime;
-    if (parsed.ptl) document.getElementById('fPtl').value = parsed.ptl;
+      if (parsed.driver) document.getElementById('fDriver').value = parsed.driver;
+      if (parsed.datetime) document.getElementById('fDatetime').value = parsed.datetime;
+      if (parsed.ptl) document.getElementById('fPtl').value = parsed.ptl;
 
-    docAttached = true;
-    document.getElementById('docAttached').style.display = 'block';
-    document.getElementById('docAttachedName').textContent = filename;
-    spinner.style.display = 'none';
-    status.className = 'scan-status show success';
-    statusText.textContent = `✓ Spremljeno na Drive – AI pročitao dokument`;
+      spinner.style.display = 'none';
+      status.className = 'scan-status show success';
+      statusText.textContent = '✓ Slika spremljena – AI pročitao dokument';
+    } catch (aiErr) {
+      spinner.style.display = 'none';
+      status.className = 'scan-status show success';
+      statusText.textContent = '✓ Slika spremljena – podatke unesi ručno';
+    }
 
   } catch (err) {
     spinner.style.display = 'none';
     status.className = 'scan-status show error';
-    statusText.textContent = '✗ Greška – unesi podatke ručno';
+    statusText.textContent = '✗ ' + (err && err.message ? err.message : 'Greška') + ' – unesi podatke ručno';
     console.error(err);
   }
 
   event.target.value = '';
 }
 
-// ─── AI SCAN ───
-async function handleScan(event, type) {
-  const file = event.target.files[0];
-  if (!file) return;
-
-  const status = document.getElementById('scanStatus');
-  const statusText = document.getElementById('scanStatusText');
-  const spinner = document.getElementById('scanSpinner');
-  status.className = 'scan-status show';
-  spinner.style.display = 'block';
-  statusText.textContent = 'Učitavanje dokumenta...';
-
-  // Prikaži preview slike
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    document.getElementById('scanImg').src = e.target.result;
-    document.getElementById('scanPreview').style.display = 'block';
-  };
-  reader.readAsDataURL(file);
-
-  try {
-    // Pretvori sliku u PDF
-    statusText.textContent = 'Pretvaranje u PDF...';
-    const base64Img = await new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => resolve(r.result);
-      r.onerror = reject;
-      r.readAsDataURL(file);
-    });
-
-    // Učitaj dimenzije slike
-    const img = await new Promise((resolve) => {
-      const i = new Image();
-      i.onload = () => resolve(i);
-      i.src = base64Img;
-    });
-
-    // Napravi PDF
-    const { jsPDF } = window.jspdf;
-    const isLandscape = img.width > img.height;
-    const pdf = new jsPDF({ orientation: isLandscape ? 'landscape' : 'portrait', unit: 'mm', format: 'a4' });
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
-    const ratio = Math.min(pageW / img.width, pageH / img.height);
-    const w = img.width * ratio;
-    const h = img.height * ratio;
-    const x = (pageW - w) / 2;
-    const y = (pageH - h) / 2;
-    pdf.addImage(base64Img, 'JPEG', x, y, w, h);
-    docPdfBlob = pdf.output('blob');
-
-    statusText.textContent = 'AI čita teretni list...';
-
-    // Pošalji sliku AI-u za čitanje (AI ne čita PDF direktno, koristimo originalnu sliku)
-    const base64 = base64Img.split(',')[1];
-    const mediaType = file.type || 'image/jpeg';
-
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 1000,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
-            { type: 'text', text: `Ovo je slika prijevoznog teretnog lista (CMR ili sličan dokument). Izvuci sljedeće podatke i vrati SAMO JSON bez ikakvih objašnjenja ili markdown backtickova:
-{
-  "driver": "ime vozača ako je vidljivo, inače prazan string",
-  "datetime": "datum ako postoji u formatu YYYY-MM-DD, inače prazan string",
-  "ptl": "broj teretnog lista ili otpremnice ako je vidljiv, inače prazan string"
-}
-Ako neki podatak nije vidljiv, ostavi prazan string. Vrati SAMO JSON.` }
-          ]
-        }]
-      })
-    });
-
-    const data = await response.json();
-    const raw = data.content?.map(c => c.text || '').join('') || '';
-    const clean = raw.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(clean);
-
-    if (parsed.driver) document.getElementById('fDriver').value = parsed.driver;
-    if (parsed.datetime) document.getElementById('fDatetime').value = parsed.datetime;
-    if (parsed.ptl) document.getElementById('fPtl').value = parsed.ptl;
-
-    const filled = [parsed.driver, parsed.datetime, parsed.ptl].filter(Boolean).length;
-    spinner.style.display = 'none';
-    status.className = 'scan-status show success';
-    statusText.textContent = `✓ Slika spremljena na Drive, pronađeno ${filled} polja`;
-
-    docAttached = true;
-    document.getElementById('docAttached').style.display = 'block';
-    document.getElementById('docAttachedName').textContent = filename;
-
-  } catch (err) {
-    spinner.style.display = 'none';
-    status.className = 'scan-status show error';
-    statusText.textContent = '✗ Greška – unesi podatke ručno';
-    console.error(err);
-  }
-
-  event.target.value = '';
-}
-
-// ─── AI SCAN ───
-async function handleScan(event, type) {
-  const file = event.target.files[0];
-  if (!file) return;
-
-  docAttached = true;
-  document.getElementById('docAttached').style.display = 'block';
-  document.getElementById('docAttachedName').textContent = file.name;
-
-  // PDF — samo priloži, ne čitaj AI-em
-  if (type === 'pdf') {
-    document.getElementById('scanPreview').style.display = 'none';
-    document.getElementById('scanStatus').className = 'scan-status show success';
-    document.getElementById('scanSpinner').style.display = 'none';
-    document.getElementById('scanStatusText').textContent = '✓ PDF priložen – unesi podatke ručno';
-    event.target.value = '';
-    return;
-  }
-
-  // Slika — prikaži preview i čitaj AI-em
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    document.getElementById('scanImg').src = e.target.result;
-    document.getElementById('scanPreview').style.display = 'block';
-  };
-  reader.readAsDataURL(file);
-
-  const status = document.getElementById('scanStatus');
-  const statusText = document.getElementById('scanStatusText');
-  const spinner = document.getElementById('scanSpinner');
-  status.className = 'scan-status show';
-  spinner.style.display = 'block';
-  statusText.textContent = 'AI čita teretni list...';
-
-  try {
-    const base64 = await new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => resolve(r.result.split(',')[1]);
-      r.onerror = reject;
-      r.readAsDataURL(file);
-    });
-
-    const mediaType = file.type || 'image/jpeg';
-
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 1000,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
-            { type: 'text', text: `Ovo je slika prijevoznog teretnog lista (CMR ili sličan dokument). Izvuci sljedeće podatke i vrati SAMO JSON bez ikakvih objašnjenja ili markdown backtickova:
-{
-  "from": "mjesto polazišta (grad/adresa pošiljatelja)",
-  "to": "mjesto odredišta (grad/adresa primatelja)",
-  "driver": "ime vozača ako je vidljivo, inače prazan string",
-  "datetime": "datum ako postoji u formatu YYYY-MM-DD, inače prazan string",
-  "ptl": "broj teretnog lista ili otpremnice ako je vidljiv, inače prazan string"
-}
-Ako neki podatak nije vidljiv, ostavi prazan string. Vrati SAMO JSON.` }
-          ]
-        }]
-      })
-    });
-
-    const data = await response.json();
-    const raw = data.content?.map(c => c.text || '').join('') || '';
-    const clean = raw.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(clean);
-
-    if (parsed.driver) document.getElementById('fDriver').value = parsed.driver;
-    if (parsed.datetime) document.getElementById('fDatetime').value = parsed.datetime;
-    if (parsed.ptl) document.getElementById('fPtl').value = parsed.ptl;
-
-    const filled = [parsed.driver, parsed.datetime, parsed.ptl].filter(Boolean).length;
-    spinner.style.display = 'none';
-    status.className = 'scan-status show success';
-    statusText.textContent = `✓ Pronađeno ${filled} polja – provjeri i dopuni po potrebi`;
-
-  } catch (err) {
-    spinner.style.display = 'none';
-    status.className = 'scan-status show error';
-    statusText.textContent = '✗ Nije uspjelo čitanje – unesi podatke ručno';
-  }
-
-  event.target.value = '';
-}
 
 function previewDoc() {
   const imgSrc = document.getElementById('scanImg').src;
@@ -1603,14 +1442,12 @@ function closeDocPreview() {
 }
 
 function downloadPdf() {
-  if (!docPdfBlob) { alert('Nema PDF-a za preuzimanje.'); return; }
-  const name = document.getElementById('docAttachedName').textContent || 'teretni-list.pdf';
-  const url = URL.createObjectURL(docPdfBlob);
+  if (!docImageDataUrl) { alert('Nema slike za preuzimanje.'); return; }
+  const name = document.getElementById('docAttachedName').textContent || 'teretni-list.jpg';
   const a = document.createElement('a');
-  a.href = url;
+  a.href = docImageDataUrl;
   a.download = name;
   a.click();
-  URL.revokeObjectURL(url);
 }
 
 function closeTransportModal() {
