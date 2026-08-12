@@ -1087,14 +1087,19 @@ function getFiltered() {
 // ─── STATS ───
 function updateStats() {
   const vis = visibleTransports();
-  const active = vis.filter(t => t.status === 'U tijeku').length;
 
   if (currentUser === 'main') {
+    const ukupnoAuta = transports.reduce((s, t) => s + (parseInt(t.cars) || 0), 0);
+    const ukupnoPovrat = transports.filter(t => t.povrat === 'da').reduce((s, t) => s + (parseInt(t.povratOpis) || 0), 0);
     document.getElementById('statsGrid').style.gridTemplateColumns = 'repeat(3,1fr)';
     document.getElementById('statsGrid').innerHTML = `
       <div class="stat-card"><div class="stat-label">Ukupno prijevoza</div><div class="stat-value">${transports.length}</div><div class="stat-sub">svi kamioni</div></div>
-      <div class="stat-card"><div class="stat-label">U tijeku</div><div class="stat-value" style="color:var(--yellow)">${active}</div><div class="stat-sub">aktivni</div></div>
-      <div class="stat-card"><div class="stat-label">Kamiona</div><div class="stat-value" style="color:var(--accent)">${trucks.length}</div><div class="stat-sub">registrirano</div></div>
+      <div class="stat-card">
+        <div class="stat-label">Ukupno auta</div>
+        <div class="stat-value" style="color:var(--accent)">${ukupnoAuta}</div>
+        <div class="stat-sub">${ukupnoPovrat > 0 ? `↩ Povrat: <strong style="color:var(--yellow)">${ukupnoPovrat}</strong>` : 'bez povrata'}</div>
+      </div>
+      <div class="stat-card"><div class="stat-label">Kamiona</div><div class="stat-value">${trucks.length}</div><div class="stat-sub">registrirano</div></div>
     `;
   } else {
     const myTruck = trucks.find(t => t.id === currentUser);
@@ -1601,28 +1606,6 @@ function renderTruckManage() {
   }).join('');
 }
 
-// ─── STATS TAB ───
-function renderStats() {
-  const container = document.getElementById('statsDetail');
-  const trucksToShow = currentUser === 'main' ? trucks : trucks.filter(t => t.id === currentUser);
-
-  container.innerHTML = trucksToShow.map(truck => {
-    const p = PALETTE[truck.paletteIdx % PALETTE.length];
-    const list = transports.filter(t => t.truckId === truck.id);
-    const done = list.filter(t => t.status === 'Završen').length;
-    const active = list.filter(t => t.status === 'U tijeku').length;
-
-    return `
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:12px">
-        <div style="font-weight:700;font-size:15px;color:${p.color};margin-bottom:14px">🚛 ${truck.name}${truck.driver ? ' · ' + truck.driver : ''}</div>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
-          <div><div class="stat-label">Ukupno</div><div class="stat-value">${list.length}</div></div>
-          <div><div class="stat-label">Završeno</div><div class="stat-value" style="color:var(--green)">${done}</div></div>
-          <div><div class="stat-label">U tijeku</div><div class="stat-value" style="color:var(--yellow)">${active}</div></div>
-        </div>
-      </div>`;
-  }).join('');
-}
 
 // ─── LOCATIONS ───
 function buildLocationSelects(fromVal = '', toVal = '') {
