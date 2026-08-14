@@ -723,9 +723,10 @@
             <option value="">Svi kamioni</option>
           </select>
           <select id="fuelFilterType" onchange="renderFuelTable()">
-            <option value="">Gorivo i AdBlue</option>
+            <option value="">Sve vrste</option>
             <option value="dizel">Samo gorivo</option>
             <option value="adblue">Samo AdBlue</option>
+            <option value="stanje">Samo stanja</option>
           </select>
         </div>
         <button class="btn btn-secondary" onclick="exportFuelCSV()">⬇ CSV</button>
@@ -734,6 +735,8 @@
       </div>
 
       <div class="stats" id="fuelStats" style="grid-template-columns:repeat(3,1fr);margin-bottom:14px"></div>
+
+      <div id="monthlyCons" style="margin-bottom:14px"></div>
 
       <div class="table-wrap">
         <table>
@@ -747,7 +750,7 @@
       </div>
 
       <div style="margin-top:10px;font-size:11px;color:var(--text2);line-height:1.5">
-        Potrošnja se računa iz razlike kilometraže između dva tankanja iste vrste, uz pretpostavku da se spremnik puni do vrha.
+        Mjesečna potrošnja računa se iz stanja rezervoara na kraju mjeseca. Stupac l/100km uz pojedino tankanje vrijedi samo ako se spremnik puni do vrha.
       </div>
     </div>
 
@@ -938,9 +941,10 @@
 
     <div class="form-row">
       <label class="form-label">Vrsta</label>
-      <div style="display:flex;gap:8px;margin-top:4px;">
+      <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap;">
         <button type="button" class="toggle-btn active" id="fuelTypeDizel" onclick="setFuelType('dizel')">⛽ Gorivo</button>
         <button type="button" class="toggle-btn" id="fuelTypeAdblue" onclick="setFuelType('adblue')">💧 AdBlue</button>
+        <button type="button" class="toggle-btn" id="fuelTypeStanje" onclick="setFuelType('stanje')">📊 Stanje na kraju mjeseca</button>
       </div>
       <input type="hidden" id="fFuelType" value="dizel">
     </div>
@@ -952,7 +956,7 @@
 
     <div class="form-grid">
       <div class="form-row">
-        <label class="form-label">Litre</label>
+        <label class="form-label" id="fuelLitresLabel">Litre</label>
         <input type="number" id="fFuelLitres" inputmode="decimal" step="0.01" placeholder="npr. 420">
       </div>
       <div class="form-row">
@@ -961,7 +965,7 @@
       </div>
     </div>
 
-    <div class="form-row">
+    <div class="form-row" id="fuelPlaceRow">
       <label class="form-label">Postaja / mjesto</label>
       <div style="display:flex;gap:6px">
         <select id="fFuelPlace" style="flex:1"></select>
@@ -1026,7 +1030,7 @@ const PALETTE = [
 ];
 
 // ─── GOOGLE SHEETS BACKEND ───
-const API_URL = 'https://script.google.com/macros/s/AKfycbziIbuZv5UZYAH7B5FrAk-PWsTkG0sDMTERKT11hglgHATBwWlBwIGHy1BfV-mqneyy/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbzowfsD51VH4FJ8NVBb2RBsctsUd0R3vCCGm_hGWZyVWfIrf-1WJiRPSSC3ejqcMuJQ/exec';
 
 async function api(action, body = {}, timeoutMs) {
   const url = `${API_URL}?action=${action}`;
@@ -1526,7 +1530,7 @@ function visibleFuels() {
 // tankanja istog kamiona i iste vrste
 function withConsumption(list) {
   const byKey = {};
-  list.forEach(f => {
+  list.filter(f => f.type === 'dizel' || f.type === 'adblue').forEach(f => {
     const key = f.truckId + '|' + f.type;
     if (!byKey[key]) byKey[key] = [];
     byKey[key].push(f);
@@ -1586,14 +1590,9 @@ function renderFuelStats() {
   const dizel = thisMonth.filter(f => f.type === 'dizel').reduce((s, f) => s + (parseFloat(f.litres) || 0), 0);
   const adblue = thisMonth.filter(f => f.type === 'adblue').reduce((s, f) => s + (parseFloat(f.litres) || 0), 0);
 
-  // Prosječna potrošnja goriva ovog mjeseca
-  const cons = withConsumption(vis);
-  const vrijednosti = thisMonth
-    .filter(f => f.type === 'dizel' && cons[f.id])
-    .map(f => cons[f.id]);
-  const prosjek = vrijednosti.length
-    ? (vrijednosti.reduce((a, b) => a + b, 0) / vrijednosti.length)
-    : null;
+  // Zadnja izračunata mjesečna potrošnja
+  const mjesecne = monthlyConsumption();
+  const zadnja = mjesecne.length ? mjesecne[0] : null;
 
   document.getElementById('fuelStats').innerHTML = `
     <div class="stat-card">
@@ -1607,9 +1606,9 @@ function renderFuelStats() {
       <div class="stat-sub">litara · ${monthName}</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Prosječna potrošnja</div>
-      <div class="stat-value" style="color:var(--green)">${prosjek ? prosjek.toFixed(1) : '–'}</div>
-      <div class="stat-sub">l/100 km</div>
+      <div class="stat-label">Zadnja potrošnja</div>
+      <div class="stat-value" style="color:var(--green)">${zadnja ? zadnja.cons.toFixed(1) : '–'}</div>
+      <div class="stat-sub">${zadnja ? 'l/100km · ' + zadnja.truck.name : 'nema očitanja'}</div>
     </div>`;
 }
 
@@ -1638,6 +1637,7 @@ function renderFuelTable() {
   if (data.length === 0) {
     tbody.innerHTML = '';
     empty.style.display = 'block';
+    renderMonthlyConsumption();
     return;
   }
   empty.style.display = 'none';
@@ -1647,14 +1647,23 @@ function renderFuelTable() {
     const truck = trucks.find(tr => tr.id === f.truckId);
     const p = truck ? PALETTE[(truck.paletteIdx || 0) % PALETTE.length] : PALETTE[0];
     const c = cons[f.id];
-    const jeDizel = f.type === 'dizel';
-    return `<tr>
+
+    let vrstaLabel, vrstaBg, vrstaFg;
+    if (f.type === 'adblue') {
+      vrstaLabel = 'AdBlue'; vrstaBg = 'rgba(96,165,250,0.15)'; vrstaFg = 'var(--blue)';
+    } else if (f.type === 'stanje') {
+      vrstaLabel = 'Stanje'; vrstaBg = 'rgba(52,211,153,0.15)'; vrstaFg = 'var(--green)';
+    } else {
+      vrstaLabel = 'Gorivo'; vrstaBg = 'rgba(245,166,35,0.15)'; vrstaFg = 'var(--accent)';
+    }
+
+    return `<tr${f.type === 'stanje' ? ' style="background:rgba(52,211,153,0.04)"' : ''}>
       <td class="mono" style="white-space:nowrap">${fmt(f.datetime)}</td>
-      <td><span class="badge-truck" style="background:${jeDizel ? 'rgba(245,166,35,0.15)' : 'rgba(96,165,250,0.15)'};color:${jeDizel ? 'var(--accent)' : 'var(--blue)'}">${jeDizel ? 'Gorivo' : 'AdBlue'}</span></td>
+      <td><span class="badge-truck" style="background:${vrstaBg};color:${vrstaFg}">${vrstaLabel}</span></td>
       <td class="mono" style="text-align:center;font-weight:700">${f.litres || '–'}</td>
       <td class="mono" style="text-align:center">${f.km ? Number(f.km).toLocaleString('hr-HR') : '–'}</td>
       <td class="mono" style="text-align:center;color:${c ? 'var(--green)' : 'var(--text2)'};font-weight:600">${c ? c.toFixed(1) : '–'}</td>
-      <td>${f.place || '–'}</td>
+      <td>${f.type === 'stanje' ? '<span style="color:var(--text2)">u rezervoaru</span>' : (f.place || '–')}</td>
       <td>${f.driver || '–'}</td>
       ${isMain ? `<td><span class="badge-truck" style="background:${p.bg};color:${p.color}">${truck ? truck.name : f.truckId}</span></td>` : ''}
       <td>
@@ -1665,16 +1674,119 @@ function renderFuelTable() {
       </td>
     </tr>`;
   }).join('');
+
+  renderMonthlyConsumption();
+}
+
+// Mjesečna potrošnja iz stanja rezervoara na kraju mjeseca:
+// (gorivo na početku + utočeno tijekom razdoblja − gorivo na kraju) / prijeđeni km × 100
+function monthlyConsumption() {
+  const rezultat = [];
+  const list = visibleFuels();
+
+  trucks.forEach(truck => {
+    const stanja = list
+      .filter(f => f.truckId === truck.id && f.type === 'stanje')
+      .map(f => ({ ...f, d: toDateInput(f.datetime) }))
+      .filter(f => f.d)
+      .sort((a, b) => a.d.localeCompare(b.d));
+
+    for (let i = 1; i < stanja.length; i++) {
+      const prije = stanja[i - 1];
+      const sada = stanja[i];
+
+      const kmPrije = parseFloat(prije.km) || 0;
+      const kmSada = parseFloat(sada.km) || 0;
+      const prijedeno = kmSada - kmPrije;
+      if (prijedeno <= 0) continue;
+
+      // Sve gorivo utočeno u razdoblju između dva očitanja
+      const utoceno = list
+        .filter(f => f.truckId === truck.id && f.type === 'dizel')
+        .filter(f => {
+          const d = toDateInput(f.datetime);
+          return d && d > prije.d && d <= sada.d;
+        })
+        .reduce((s, f) => s + (parseFloat(f.litres) || 0), 0);
+
+      const uRezervoaruPrije = parseFloat(prije.litres) || 0;
+      const uRezervoaruSada = parseFloat(sada.litres) || 0;
+      const potroseno = uRezervoaruPrije + utoceno - uRezervoaruSada;
+      if (potroseno <= 0) continue;
+
+      rezultat.push({
+        truck,
+        od: prije.d,
+        do: sada.d,
+        prijedeno,
+        utoceno,
+        potroseno,
+        cons: potroseno / prijedeno * 100,
+      });
+    }
+  });
+
+  return rezultat.sort((a, b) => b.do.localeCompare(a.do));
+}
+
+function renderMonthlyConsumption() {
+  const el = document.getElementById('monthlyCons');
+  const data = monthlyConsumption();
+
+  if (data.length === 0) {
+    el.innerHTML = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px;text-align:center;color:var(--text2);font-size:13px">
+      Za mjesečnu potrošnju trebaju dva očitanja stanja rezervoara.<br>
+      Unesi <strong>📊 Stanje na kraju mjeseca</strong> zadnji dan u mjesecu — kilometražu i procjenu goriva u rezervoaru.
+    </div>`;
+    return;
+  }
+
+  el.innerHTML = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px;">
+    <div style="font-weight:700;font-size:15px;margin-bottom:14px">📊 Mjesečna potrošnja</div>
+    ${data.map(r => {
+      const p = PALETTE[(r.truck.paletteIdx || 0) % PALETTE.length];
+      const mjesec = MONTHS_HR[new Date(r.do).getMonth()];
+      return `<div style="padding:12px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+          <div>
+            <span style="font-weight:600;color:${p.color}">${r.truck.name}</span>
+            <span style="color:var(--text2);font-size:12px;margin-left:6px">${mjesec} · ${fmt(r.od)} – ${fmt(r.do)}</span>
+          </div>
+          <div style="font-family:JetBrains Mono,monospace;font-weight:700;font-size:18px;color:var(--green)">
+            ${r.cons.toFixed(1)} <span style="font-size:11px;color:var(--text2);font-weight:400">l/100km</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--text2)">
+          <span>Prijeđeno: <strong style="color:var(--text)">${r.prijedeno.toLocaleString('hr-HR')} km</strong></span>
+          <span>Utočeno: <strong style="color:var(--accent)">${r.utoceno.toFixed(0)} l</strong></span>
+          <span>Potrošeno: <strong style="color:var(--text)">${r.potroseno.toFixed(0)} l</strong></span>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
 }
 
 // ─── TANKANJE: unos ───
 let editFuelIdx = null;
 
 function setFuelType(v) {
-  const t = v === 'adblue' ? 'adblue' : 'dizel';
+  const t = (v === 'adblue' || v === 'stanje') ? v : 'dizel';
   document.getElementById('fuelTypeDizel').classList.toggle('active', t === 'dizel');
   document.getElementById('fuelTypeAdblue').classList.toggle('active', t === 'adblue');
+  document.getElementById('fuelTypeStanje').classList.toggle('active', t === 'stanje');
   document.getElementById('fFuelType').value = t;
+
+  const jeStanje = t === 'stanje';
+  document.getElementById('fuelLitresLabel').textContent = jeStanje ? 'Goriva u rezervoaru (litre)' : 'Litre';
+  document.getElementById('fFuelLitres').placeholder = jeStanje ? 'procjena, npr. 150' : 'npr. 420';
+  document.getElementById('fuelPlaceRow').style.display = jeStanje ? 'none' : '';
+
+  // Stanje se bilježi zadnji dan u mjesecu
+  if (jeStanje && editFuelIdx === null) {
+    const now = new Date();
+    const zadnji = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    document.getElementById('fFuelDate').value = dateToStr(zadnji);
+  }
   showFuelHint();
 }
 
@@ -1832,7 +1944,7 @@ function exportFuelCSV() {
     const c = cons[f.id];
     rows.push([
       fmt(f.datetime),
-      f.type === 'dizel' ? 'Gorivo' : 'AdBlue',
+      f.type === 'dizel' ? 'Gorivo' : f.type === 'adblue' ? 'AdBlue' : 'Stanje',
       f.litres || '', f.km || '',
       c ? c.toFixed(1) : '',
       f.place || '', f.driver || '',
