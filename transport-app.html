@@ -649,6 +649,7 @@
     <!-- TABS -->
     <div class="tabs" id="tabsRow">
       <button class="tab active" onclick="showTab('pregled')">📋 Prijevozi</button>
+      <button class="tab" onclick="showTab('tankanje')">⛽ Tankanje</button>
       <button class="tab" id="tabKamioni" onclick="showTab('kamioni')" style="display:none">📅 Izvještaj</button>
     </div>
 
@@ -711,6 +712,42 @@
           <div class="empty-icon">📦</div>
           <p>Nema prijevoza. Dodaj novi prijevoz.</p>
         </div>
+      </div>
+    </div>
+
+    <!-- TAB: TANKANJE -->
+    <div id="tab-tankanje" style="display:none">
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <select id="fuelFilterTruck" onchange="renderFuelTable()">
+            <option value="">Svi kamioni</option>
+          </select>
+          <select id="fuelFilterType" onchange="renderFuelTable()">
+            <option value="">Gorivo i AdBlue</option>
+            <option value="dizel">Samo gorivo</option>
+            <option value="adblue">Samo AdBlue</option>
+          </select>
+        </div>
+        <button class="btn btn-secondary" onclick="exportFuelCSV()">⬇ CSV</button>
+        <button class="btn btn-secondary" onclick="showTab('tankanje')" title="Osvježi">🔄</button>
+        <button class="btn btn-primary" onclick="openFuelModal()">＋ Novo tankanje</button>
+      </div>
+
+      <div class="stats" id="fuelStats" style="grid-template-columns:repeat(3,1fr);margin-bottom:14px"></div>
+
+      <div class="table-wrap">
+        <table>
+          <thead id="fuelTableHead"></thead>
+          <tbody id="fuelTbody"></tbody>
+        </table>
+        <div id="fuelEmpty" class="empty" style="display:none">
+          <div class="empty-icon">⛽</div>
+          <p>Nema unesenih tankanja.</p>
+        </div>
+      </div>
+
+      <div style="margin-top:10px;font-size:11px;color:var(--text2);line-height:1.5">
+        Potrošnja se računa iz razlike kilometraže između dva tankanja iste vrste, uz pretpostavku da se spremnik puni do vrha.
       </div>
     </div>
 
@@ -894,6 +931,64 @@
   </div>
 </div>
 
+<!-- MODAL: TANKANJE -->
+<div class="modal-overlay" id="fuelModal">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-title">⛽ <span id="fuelModalTitle">Novo tankanje</span></div>
+
+    <div class="form-row">
+      <label class="form-label">Vrsta</label>
+      <div style="display:flex;gap:8px;margin-top:4px;">
+        <button type="button" class="toggle-btn active" id="fuelTypeDizel" onclick="setFuelType('dizel')">⛽ Gorivo</button>
+        <button type="button" class="toggle-btn" id="fuelTypeAdblue" onclick="setFuelType('adblue')">💧 AdBlue</button>
+      </div>
+      <input type="hidden" id="fFuelType" value="dizel">
+    </div>
+
+    <div class="form-row">
+      <label class="form-label">Datum</label>
+      <input type="date" id="fFuelDate">
+    </div>
+
+    <div class="form-grid">
+      <div class="form-row">
+        <label class="form-label">Litre</label>
+        <input type="number" id="fFuelLitres" inputmode="decimal" step="0.01" placeholder="npr. 420">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Kilometraža</label>
+        <input type="number" id="fFuelKm" inputmode="numeric" placeholder="stanje brojila">
+      </div>
+    </div>
+
+    <div class="form-row">
+      <label class="form-label">Postaja / mjesto</label>
+      <div style="display:flex;gap:6px">
+        <select id="fFuelPlace" style="flex:1"></select>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="addNewFuelPlace()" title="Dodaj novu">＋</button>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <label class="form-label">Kamion</label>
+      <select id="fFuelTruck"></select>
+    </div>
+
+    <div class="form-row">
+      <label class="form-label">Vozač</label>
+      <input type="text" id="fFuelDriver" placeholder="Ime i prezime">
+    </div>
+
+    <div id="fuelHint" style="display:none;font-size:12px;color:var(--text2);padding:8px 10px;background:var(--surface2);border-radius:7px;border:1px solid var(--border)"></div>
+
+    <div class="form-error" id="fuelFormError"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeFuelModal()">Odustani</button>
+      <button class="btn btn-primary" onclick="saveFuel()">Spremi</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL: ODABIR DOKUMENTA -->
 <div class="modal-overlay" id="docsChooserModal">
   <div class="modal" style="max-width:340px">
@@ -931,7 +1026,7 @@ const PALETTE = [
 ];
 
 // ─── GOOGLE SHEETS BACKEND ───
-const API_URL = 'https://script.google.com/macros/s/AKfycbyBxesQsvXmiai0f7Bh1DQ0UFGVT9MI7NXP7jyDPkkOyJBhxzpVTPr8eNDjbVE11eo5/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbwYRY74TcHyY7lwMLlk_f2BRdWZUacTe6qmQcxVH50AMgo1EWeJ4RV6cNxnAHF6Htan/exec';
 
 async function api(action, body = {}, timeoutMs) {
   const url = `${API_URL}?action=${action}`;
@@ -956,7 +1051,7 @@ async function api(action, body = {}, timeoutMs) {
 // ─── STATE ───
 let trucks = [];
 let transports = [];
-let locations = { from: [], to: [] };
+let locations = { from: [], to: [], fuel: [] };
 let currentUser = null;
 let editTransportIdx = null;
 
@@ -1007,11 +1102,22 @@ async function loadOlder() {
   renderTable();
 }
 
+// ─── TANKANJE ───
+let fuels = [];
+
+async function loadFuel(truckId = null) {
+  const body = {};
+  if (truckId) body.truckId = truckId;
+  const res = await api('getFuel', body);
+  fuels = res.fuels || [];
+}
+
 async function loadLocations() {
   const res = await api('getLocations');
   const all = res.locations || [];
   locations.from = all.filter(l => l.type === 'from').map(l => l.name);
   locations.to = all.filter(l => l.type === 'to').map(l => l.name);
+  locations.fuel = all.filter(l => l.type === 'fuel').map(l => l.name);
 }
 
 // ─── FONT SIZE ───
@@ -1094,7 +1200,7 @@ async function login(userId) {
   }
 
   // Prikaži pregled odmah s već učitanim podacima
-  ['pregled','kamioni'].forEach(t => {
+  ['pregled','tankanje','kamioni'].forEach(t => {
     document.getElementById('tab-' + t).style.display = t === 'pregled' ? '' : 'none';
   });
   document.querySelectorAll('.tab').forEach((el, i) => {
@@ -1115,15 +1221,23 @@ function logout() {
 
 // ─── TABS ───
 async function showTab(name) {
-  ['pregled','kamioni'].forEach(t => {
+  ['pregled','tankanje','kamioni'].forEach(t => {
     document.getElementById('tab-' + t).style.display = t === name ? '' : 'none';
   });
   document.querySelectorAll('.tab').forEach((el, i) => {
-    const names = ['pregled','kamioni'];
+    const names = ['pregled','tankanje','kamioni'];
     el.classList.toggle('active', names[i] === name);
   });
+  // Gornje kartice statistike vrijede samo za prijevoze
+  document.getElementById('statsGrid').style.display = name === 'pregled' ? '' : 'none';
   if (name === 'kamioni') { await refreshData(); renderReport(); await loadTrucks(); renderTruckManage(); }
   if (name === 'pregled') { await flushPending(true); await refreshData(); updateStats(); renderTable(); renderPendingBar(); }
+  if (name === 'tankanje') {
+    showLoading('Učitavanje tankanja...');
+    try { await loadFuel(currentUser === 'main' ? null : currentUser); } catch(e) {}
+    hideLoading();
+    renderFuelTable();
+  }
 }
 
 async function refreshData() {
@@ -1400,6 +1514,337 @@ function renderTable() {
       </td>
     </tr>`;
   }).join('');
+}
+
+// ─── TANKANJE: prikaz i izračun potrošnje ───
+function visibleFuels() {
+  if (currentUser === 'main') return fuels;
+  return fuels.filter(f => f.truckId === currentUser);
+}
+
+// Za svako tankanje izračunaj potrošnju iz razlike km od prethodnog
+// tankanja istog kamiona i iste vrste
+function withConsumption(list) {
+  const byKey = {};
+  list.forEach(f => {
+    const key = f.truckId + '|' + f.type;
+    if (!byKey[key]) byKey[key] = [];
+    byKey[key].push(f);
+  });
+  const result = {};
+  Object.values(byKey).forEach(arr => {
+    const sorted = arr.slice().sort((a, b) => (parseFloat(a.km) || 0) - (parseFloat(b.km) || 0));
+    sorted.forEach((f, i) => {
+      if (i === 0) { result[f.id] = null; return; }
+      const prevKm = parseFloat(sorted[i - 1].km) || 0;
+      const km = parseFloat(f.km) || 0;
+      const litres = parseFloat(f.litres) || 0;
+      const razlika = km - prevKm;
+      result[f.id] = (razlika > 0 && litres > 0) ? (litres / razlika * 100) : null;
+    });
+  });
+  return result;
+}
+
+function getFilteredFuels() {
+  const ft = document.getElementById('fuelFilterTruck').value;
+  const fv = document.getElementById('fuelFilterType').value;
+  return visibleFuels()
+    .filter(f => (!ft || f.truckId === ft) && (!fv || f.type === fv))
+    .sort((a, b) => {
+      const da = toDateInput(a.datetime) || '';
+      const db = toDateInput(b.datetime) || '';
+      if (da !== db) return db.localeCompare(da);
+      return (parseFloat(b.km) || 0) - (parseFloat(a.km) || 0);
+    });
+}
+
+function rebuildFuelTruckFilter() {
+  const sel = document.getElementById('fuelFilterTruck');
+  const val = sel.value;
+  sel.innerHTML = '<option value="">Svi kamioni</option>';
+  const list = currentUser === 'main' ? trucks : trucks.filter(t => t.id === currentUser);
+  list.forEach(t => {
+    const o = document.createElement('option');
+    o.value = t.id; o.textContent = t.name;
+    sel.appendChild(o);
+  });
+  sel.value = val;
+  sel.style.display = currentUser === 'main' ? '' : 'none';
+}
+
+function renderFuelStats() {
+  const now = new Date();
+  const monthName = now.toLocaleDateString('hr-HR', { month: 'long' });
+  const vis = visibleFuels();
+  const thisMonth = vis.filter(f => {
+    const d = toDateInput(f.datetime);
+    if (!d) return false;
+    const dt = new Date(d);
+    return dt.getMonth() === now.getMonth() && dt.getFullYear() === now.getFullYear();
+  });
+  const dizel = thisMonth.filter(f => f.type === 'dizel').reduce((s, f) => s + (parseFloat(f.litres) || 0), 0);
+  const adblue = thisMonth.filter(f => f.type === 'adblue').reduce((s, f) => s + (parseFloat(f.litres) || 0), 0);
+
+  // Prosječna potrošnja goriva ovog mjeseca
+  const cons = withConsumption(vis);
+  const vrijednosti = thisMonth
+    .filter(f => f.type === 'dizel' && cons[f.id])
+    .map(f => cons[f.id]);
+  const prosjek = vrijednosti.length
+    ? (vrijednosti.reduce((a, b) => a + b, 0) / vrijednosti.length)
+    : null;
+
+  document.getElementById('fuelStats').innerHTML = `
+    <div class="stat-card">
+      <div class="stat-label">Gorivo ovaj mjesec</div>
+      <div class="stat-value" style="color:var(--accent)">${dizel ? dizel.toFixed(0) : 0}</div>
+      <div class="stat-sub">litara · ${monthName}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">AdBlue ovaj mjesec</div>
+      <div class="stat-value" style="color:var(--blue)">${adblue ? adblue.toFixed(0) : 0}</div>
+      <div class="stat-sub">litara · ${monthName}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Prosječna potrošnja</div>
+      <div class="stat-value" style="color:var(--green)">${prosjek ? prosjek.toFixed(1) : '–'}</div>
+      <div class="stat-sub">l/100 km</div>
+    </div>`;
+}
+
+function renderFuelTable() {
+  const isMain = currentUser === 'main';
+  rebuildFuelTruckFilter();
+  renderFuelStats();
+
+  document.getElementById('fuelTableHead').innerHTML = `<tr>
+    <th>Datum</th>
+    <th>Vrsta</th>
+    <th style="text-align:center">Litre</th>
+    <th style="text-align:center">Km</th>
+    <th style="text-align:center">l/100km</th>
+    <th>Postaja</th>
+    <th>Vozač</th>
+    ${isMain ? '<th>Kamion</th>' : ''}
+    <th></th>
+  </tr>`;
+
+  const data = getFilteredFuels();
+  const cons = withConsumption(visibleFuels());
+  const tbody = document.getElementById('fuelTbody');
+  const empty = document.getElementById('fuelEmpty');
+
+  if (data.length === 0) {
+    tbody.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  tbody.innerHTML = data.map(f => {
+    const origIdx = fuels.indexOf(f);
+    const truck = trucks.find(tr => tr.id === f.truckId);
+    const p = truck ? PALETTE[(truck.paletteIdx || 0) % PALETTE.length] : PALETTE[0];
+    const c = cons[f.id];
+    const jeDizel = f.type === 'dizel';
+    return `<tr>
+      <td class="mono" style="white-space:nowrap">${fmt(f.datetime)}</td>
+      <td><span class="badge-truck" style="background:${jeDizel ? 'rgba(245,166,35,0.15)' : 'rgba(96,165,250,0.15)'};color:${jeDizel ? 'var(--accent)' : 'var(--blue)'}">${jeDizel ? 'Gorivo' : 'AdBlue'}</span></td>
+      <td class="mono" style="text-align:center;font-weight:700">${f.litres || '–'}</td>
+      <td class="mono" style="text-align:center">${f.km ? Number(f.km).toLocaleString('hr-HR') : '–'}</td>
+      <td class="mono" style="text-align:center;color:${c ? 'var(--green)' : 'var(--text2)'};font-weight:600">${c ? c.toFixed(1) : '–'}</td>
+      <td>${f.place || '–'}</td>
+      <td>${f.driver || '–'}</td>
+      ${isMain ? `<td><span class="badge-truck" style="background:${p.bg};color:${p.color}">${truck ? truck.name : f.truckId}</span></td>` : ''}
+      <td>
+        <div style="display:flex;gap:5px">
+          <button class="btn btn-secondary btn-sm" onclick="openFuelModal(${origIdx})">✏️</button>
+          ${isMain ? `<button class="btn btn-danger btn-sm" onclick="deleteFuel(${origIdx})">🗑</button>` : ''}
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+// ─── TANKANJE: unos ───
+let editFuelIdx = null;
+
+function setFuelType(v) {
+  const t = v === 'adblue' ? 'adblue' : 'dizel';
+  document.getElementById('fuelTypeDizel').classList.toggle('active', t === 'dizel');
+  document.getElementById('fuelTypeAdblue').classList.toggle('active', t === 'adblue');
+  document.getElementById('fFuelType').value = t;
+  showFuelHint();
+}
+
+function buildFuelPlaceSelect(val = '') {
+  const sel = document.getElementById('fFuelPlace');
+  const list = locations.fuel || [];
+  sel.innerHTML = '<option value="">– Odaberi –</option>' +
+    list.map(l => `<option value="${l}" ${l === val ? 'selected' : ''}>${l}</option>`).join('');
+  if (val) sel.value = val;
+}
+
+async function addNewFuelPlace() {
+  const name = prompt('Upiši novu postaju ili mjesto:');
+  if (!name || !name.trim()) return;
+  const trimmed = name.trim();
+  showLoading('Spremanje...');
+  try {
+    await api('saveLocation', { name: trimmed, type: 'fuel' });
+    await loadLocations();
+    buildFuelPlaceSelect(trimmed);
+  } catch(e) { alert('Greška pri dodavanju.'); }
+  hideLoading();
+}
+
+// Pokaži zadnju kilometražu da vozač zna što upisuje
+function showFuelHint() {
+  const hint = document.getElementById('fuelHint');
+  const truckId = document.getElementById('fFuelTruck').value;
+  const type = document.getElementById('fFuelType').value;
+  const trenutniId = editFuelIdx !== null ? fuels[editFuelIdx].id : null;
+
+  const prethodna = fuels
+    .filter(f => f.truckId === truckId && f.type === type && f.id !== trenutniId)
+    .map(f => parseFloat(f.km) || 0)
+    .filter(km => km > 0)
+    .sort((a, b) => b - a)[0];
+
+  if (!prethodna) { hint.style.display = 'none'; return; }
+  hint.style.display = 'block';
+  hint.textContent = `Zadnje zabilježeno stanje brojila: ${prethodna.toLocaleString('hr-HR')} km`;
+}
+
+async function openFuelModal(idx = null) {
+  editFuelIdx = idx;
+  document.getElementById('fuelModalTitle').textContent = idx !== null ? 'Uredi tankanje' : 'Novo tankanje';
+  document.getElementById('fuelFormError').style.display = 'none';
+
+  showLoading('Učitavanje...');
+  try { await loadLocations(); } catch(e) {}
+  hideLoading();
+
+  const sel = document.getElementById('fFuelTruck');
+  sel.innerHTML = '';
+  const list = currentUser === 'main' ? trucks : trucks.filter(t => t.id === currentUser);
+  list.forEach(t => {
+    const o = document.createElement('option');
+    o.value = t.id; o.textContent = t.name;
+    sel.appendChild(o);
+  });
+  sel.disabled = currentUser !== 'main';
+  sel.onchange = showFuelHint;
+
+  if (idx !== null) {
+    const f = fuels[idx];
+    setFuelType(f.type);
+    document.getElementById('fFuelDate').value = toDateInput(f.datetime);
+    document.getElementById('fFuelLitres').value = f.litres || '';
+    document.getElementById('fFuelKm').value = f.km || '';
+    buildFuelPlaceSelect(f.place || '');
+    sel.value = f.truckId;
+    document.getElementById('fFuelDriver').value = f.driver || '';
+  } else {
+    setFuelType('dizel');
+    document.getElementById('fFuelDate').value = new Date().toISOString().split('T')[0];
+    document.getElementById('fFuelLitres').value = '';
+    document.getElementById('fFuelKm').value = '';
+    buildFuelPlaceSelect('');
+    sel.value = currentUser !== 'main' ? currentUser : (trucks[0] ? trucks[0].id : '');
+    const truck = trucks.find(t => t.id === sel.value);
+    document.getElementById('fFuelDriver').value = (truck && truck.driver) ? truck.driver : '';
+  }
+
+  showFuelHint();
+  document.getElementById('fuelModal').classList.add('open');
+}
+
+function closeFuelModal() {
+  document.getElementById('fuelModal').classList.remove('open');
+}
+
+async function saveFuel() {
+  const prev = editFuelIdx !== null ? fuels[editFuelIdx] : null;
+  const f = {
+    id: prev ? prev.id : 'fu_' + Date.now(),
+    truckId: document.getElementById('fFuelTruck').value,
+    datetime: document.getElementById('fFuelDate').value,
+    type: document.getElementById('fFuelType').value,
+    litres: document.getElementById('fFuelLitres').value,
+    km: document.getElementById('fFuelKm').value,
+    place: document.getElementById('fFuelPlace').value,
+    driver: document.getElementById('fFuelDriver').value.trim(),
+  };
+
+  const err = document.getElementById('fuelFormError');
+  if (!f.datetime || !f.litres) {
+    err.textContent = 'Ispuni datum i broj litara.';
+    err.style.display = 'block';
+    return;
+  }
+
+  // Upozorenje ako je kilometraža manja od prethodne
+  if (f.km) {
+    const veca = fuels
+      .filter(x => x.truckId === f.truckId && x.id !== f.id)
+      .map(x => parseFloat(x.km) || 0)
+      .filter(km => km > parseFloat(f.km));
+    if (veca.length) {
+      const najveca = Math.max(...veca);
+      if (!confirm(`⚠️ Uneseno je ${Number(f.km).toLocaleString('hr-HR')} km, a već postoji zapis s ${najveca.toLocaleString('hr-HR')} km.\n\nJe li kilometraža točna?`)) return;
+    }
+  }
+
+  closeFuelModal();
+  showLoading('Spremanje...');
+  try {
+    const res = await api('saveFuel', { fuel: f });
+    if (res && res.error) throw new Error(res.error);
+    await loadFuel(currentUser === 'main' ? null : currentUser);
+  } catch(e) {
+    alert('Greška pri spremanju tankanja.');
+  }
+  hideLoading();
+  renderFuelTable();
+}
+
+async function deleteFuel(idx) {
+  if (currentUser !== 'main') { alert('Brisanje može samo Glavni.'); return; }
+  const f = fuels[idx];
+  if (!confirm(`Obrisati ovo tankanje?\n\nDatum: ${fmt(f.datetime)}\nLitre: ${f.litres}\nKm: ${f.km || '–'}`)) return;
+  showLoading('Brisanje...');
+  try {
+    await api('deleteFuel', { id: f.id });
+    await loadFuel(currentUser === 'main' ? null : currentUser);
+  } catch(e) { alert('Greška pri brisanju.'); }
+  hideLoading();
+  renderFuelTable();
+}
+
+function exportFuelCSV() {
+  const data = getFilteredFuels();
+  const cons = withConsumption(visibleFuels());
+  const rows = [['Datum','Vrsta','Litre','Kilometraza','l/100km','Postaja','Vozac','Kamion']];
+  data.forEach(f => {
+    const truck = trucks.find(t => t.id === f.truckId);
+    const c = cons[f.id];
+    rows.push([
+      fmt(f.datetime),
+      f.type === 'dizel' ? 'Gorivo' : 'AdBlue',
+      f.litres || '', f.km || '',
+      c ? c.toFixed(1) : '',
+      f.place || '', f.driver || '',
+      truck ? truck.name : f.truckId
+    ]);
+  });
+  const csv = rows.map(r => r.map(c => `"${String(c||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'tankanja.csv';
+  a.click();
 }
 
 // ─── TRANSPORT MODAL ───
@@ -2251,7 +2696,7 @@ function exportPDF() {
 }
 
 // ─── CLOSE MODALS ON OVERLAY CLICK ───
-['transportModal','truckModal','docsChooserModal'].forEach(id => {
+['transportModal','truckModal','docsChooserModal','fuelModal'].forEach(id => {
   document.getElementById(id).addEventListener('click', function(e) {
     if (e.target === this) this.classList.remove('open');
   });
