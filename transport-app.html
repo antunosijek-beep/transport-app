@@ -679,6 +679,7 @@
         <button class="btn btn-secondary" onclick="exportCSV()">⬇ CSV</button>
         <button class="btn btn-secondary" onclick="exportPDF()">⬇ PDF</button>
         <button class="btn btn-secondary" onclick="showTab('pregled')" title="Osvježi">🔄</button>
+        <button class="btn btn-secondary" id="loadOlderBtn" onclick="loadOlder()" title="Učitaj cijelu povijest">📂 Starije</button>
         <button class="btn btn-primary" onclick="openTransportModal()">＋ Novi prijevoz</button>
       </div>
 
@@ -930,7 +931,7 @@ const PALETTE = [
 ];
 
 // ─── GOOGLE SHEETS BACKEND ───
-const API_URL = 'https://script.google.com/macros/s/AKfycbxRNn6FVLhSC2wPMnXEynffm4NzZCiHNGtVc6xMBARqthq-aXpC2SVs9GcKDTB77xwk/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbwTBsWXYjA0AJ8JPO7LFq-XT3rKgY4OVSIVzm-IAkKgx_BSrUwkXrZQxJd6fWnV4_sv/exec';
 
 async function api(action, body = {}, timeoutMs) {
   const url = `${API_URL}?action=${action}`;
@@ -973,9 +974,37 @@ async function loadTrucks() {
   trucks = (res.trucks || []).map((t, i) => ({ ...t, paletteIdx: parseInt(t.paletteIdx) || i }));
 }
 
+// Koliko mjeseci povijesti se učitava po defaultu (brzina na mobitelu)
+const HISTORY_MONTHS = 6;
+let loadAll = false;
+
+function sinceDate() {
+  const d = new Date();
+  d.setMonth(d.getMonth() - HISTORY_MONTHS);
+  d.setDate(1);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-01`;
+}
+
 async function loadTransports(truckId = null) {
-  const res = await api('getTransports', truckId ? { truckId } : {});
+  const body = {};
+  if (truckId) body.truckId = truckId;
+  if (!loadAll) body.since = sinceDate();
+  const res = await api('getTransports', body);
   transports = res.transports || [];
+  const btn = document.getElementById('loadOlderBtn');
+  if (btn) btn.style.display = loadAll ? 'none' : '';
+}
+
+async function loadOlder() {
+  loadAll = true;
+  showLoading('Učitavanje cijele povijesti...');
+  try {
+    await loadTransports(currentUser === 'main' ? null : currentUser);
+  } catch(e) { alert('Greška pri učitavanju.'); }
+  hideLoading();
+  updateStats();
+  renderTable();
 }
 
 async function loadLocations() {
@@ -1472,8 +1501,22 @@ function renderDocs() {
     </div>`).join('');
 }
 
-function removeDoc(i) {
-  if (!confirm('Ukloniti ovaj dokument s prijevoza?\n\n(Datoteka ostaje u Google Drive mapi.)')) return;
+async function removeDoc(i) {
+  const d = docs[i];
+  if (!d) return;
+  if (!confirm('Obrisati ovaj dokument?\n\nUklanja se s prijevoza i premješta u smeće na Google Driveu (može se vratiti 30 dana).')) return;
+  showLoading('Brisanje dokumenta...');
+  try {
+    const res = await api('deleteDoc', { url: d.url });
+    if (res && res.error) throw new Error(res.error);
+  } catch(e) {
+    hideLoading();
+    if (!confirm('Datoteku nije bilo moguće obrisati s Drivea.\n\nUkloniti je barem s prijevoza?')) return;
+    docs.splice(i, 1);
+    renderDocs();
+    return;
+  }
+  hideLoading();
   docs.splice(i, 1);
   renderDocs();
 }
@@ -2024,6 +2067,25 @@ function renderReport() {
     const totPovrat = monthTrans.filter(t=>t.povrat==='da').reduce((s,t) => s+(parseInt(t.povratOpis)||0), 0);
     const totNapl = monthTrans.filter(t=>t.naplacen==='da').length;
 
+    // Razrada po odredištima
+    const perDest = {};
+    monthTrans.forEach(t => {
+      const key = t.to || '(bez odredišta)';
+      if (!perDest[key]) perDest[key] = { voznji: 0, auta: 0, povrat: 0 };
+      perDest[key].voznji += 1;
+      perDest[key].auta += parseInt(t.cars) || 0;
+      if (t.povrat === 'da') perDest[key].povrat += parseInt(t.povratOpis) || 0;
+    });
+    const destRows = Object.entries(perDest)
+      .sort((a, b) => b[1].auta - a[1].auta)
+      .map(([naziv, v]) => `
+        <div style="display:grid;grid-template-columns:1fr repeat(3,auto);gap:6px 16px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">
+          <div style="font-size:13px">${naziv}</div>
+          <div style="text-align:center;font-family:JetBrains Mono,monospace;font-size:12px">${v.voznji}</div>
+          <div style="text-align:center;font-family:JetBrains Mono,monospace;font-weight:700;color:var(--accent)">${v.auta}</div>
+          <div style="text-align:center;font-family:JetBrains Mono,monospace;color:var(--yellow)">${v.povrat || '–'}</div>
+        </div>`).join('');
+
     return `<div style="margin-bottom:16px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px;">
       <div style="font-weight:700;font-size:14px;margin-bottom:12px;color:var(--text)">${MONTHS_HR[mi]} ${curYear}</div>
       ${truckRows}
@@ -2034,27 +2096,66 @@ function renderReport() {
         <div style="text-align:center;font-weight:700;font-family:JetBrains Mono,monospace;color:var(--yellow)">${totPovrat||'–'}</div>
         <div style="text-align:center;font-weight:700;font-family:JetBrains Mono,monospace;color:var(--green)">${totNapl}/${monthTrans.length}</div>
       </div>
+
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+        <div style="display:grid;grid-template-columns:1fr repeat(3,auto);gap:6px 16px;font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:0.6px;font-weight:600;padding-bottom:6px">
+          <div>Odredište</div><div style="text-align:center">Vožnji</div><div style="text-align:center">Auta</div><div style="text-align:center">Povrat</div>
+        </div>
+        ${destRows}
+      </div>
     </div>`;
   }).join('');
+
+  // Napomena ako nije učitana cijela povijest
+  if (!loadAll) {
+    container.innerHTML += `<div style="text-align:center;padding:12px;color:var(--text2);font-size:12px">
+      Prikazani su podaci zadnjih ${HISTORY_MONTHS} mjeseci.
+      <button class="btn btn-secondary btn-sm" style="margin-left:8px" onclick="loadOlderReport()">📂 Učitaj cijelu povijest</button>
+    </div>`;
+  }
+}
+
+async function loadOlderReport() {
+  await loadOlder();
+  renderReport();
 }
 
 function exportReportCSV() {
   const year = document.getElementById('reportYear').value;
-  const rows = [['Mjesec','Kamion','Vozač','Prijevozi','Auta','Povrat auta','Naplaćeno']];
+  const rows = [['Mjesec','Razina','Naziv','Vozač','Prijevozi','Auta','Povrat auta','Naplaćeno']];
   MONTHS_HR.forEach((mName, mi) => {
+    const monthTrans = transports.filter(t => {
+      const d = toDateInput(t.datetime);
+      if (!d) return false;
+      const dt = new Date(d);
+      return dt.getFullYear() === parseInt(year) && dt.getMonth() === mi;
+    });
+    if (monthTrans.length === 0) return;
+
+    // Po kamionu
     trucks.forEach(truck => {
-      const tt = transports.filter(t => {
-        const d = toDateInput(t.datetime);
-        if (!d) return false;
-        const dt = new Date(d);
-        return dt.getFullYear() === parseInt(year) && dt.getMonth() === mi && t.truckId === truck.id;
-      });
+      const tt = monthTrans.filter(t => t.truckId === truck.id);
       if (tt.length === 0) return;
       const auta = tt.reduce((s,t) => s+(parseInt(t.cars)||0), 0);
       const povrat = tt.filter(t=>t.povrat==='da').reduce((s,t) => s+(parseInt(t.povratOpis)||0), 0);
       const napl = tt.filter(t=>t.naplacen==='da').length;
-      rows.push([mName + ' ' + year, truck.name, truck.driver||'', tt.length, auta, povrat, napl + '/' + tt.length]);
+      rows.push([mName + ' ' + year, 'Kamion', truck.name, truck.driver||'', tt.length, auta, povrat, napl + '/' + tt.length]);
     });
+
+    // Po odredištu
+    const perDest = {};
+    monthTrans.forEach(t => {
+      const key = t.to || '(bez odredišta)';
+      if (!perDest[key]) perDest[key] = { voznji: 0, auta: 0, povrat: 0 };
+      perDest[key].voznji += 1;
+      perDest[key].auta += parseInt(t.cars) || 0;
+      if (t.povrat === 'da') perDest[key].povrat += parseInt(t.povratOpis) || 0;
+    });
+    Object.entries(perDest)
+      .sort((a,b) => b[1].auta - a[1].auta)
+      .forEach(([naziv, v]) => {
+        rows.push([mName + ' ' + year, 'Odredište', naziv, '', v.voznji, v.auta, v.povrat, '']);
+      });
   });
   const csv = rows.map(r => r.map(c => `"${String(c||'').replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob = new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8;'});
