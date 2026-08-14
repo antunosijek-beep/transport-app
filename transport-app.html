@@ -748,25 +748,12 @@
       <input type="file" id="scanInputGal" accept="image/*" style="display:none" onchange="handleScan(event,'image')">
       <input type="file" id="scanInputPdf" accept="application/pdf" style="display:none" onchange="handleScan(event,'pdf')">
 
-      <div class="scan-preview" id="scanPreview">
-        <img id="scanImg" src="" alt="Skenirana slika">
-        <div class="scan-preview-label" id="scanPreviewLabel">Učitana slika teretnog lista</div>
-      </div>
-
       <div class="scan-status" id="scanStatus">
         <div class="spinner" id="scanSpinner"></div>
         <span id="scanStatusText">AI čita teretni list...</span>
       </div>
 
-      <div id="docAttached" style="display:none;font-size:12px;color:var(--green);padding:6px 10px;background:rgba(52,211,153,0.1);border-radius:7px;border:1px solid rgba(52,211,153,0.2);">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-          <span>✓ <span id="docAttachedName">Dokument priložen</span></span>
-          <div style="display:flex;gap:6px;">
-            <button type="button" class="btn btn-secondary btn-sm" onclick="previewDoc()">👁 Pregled</button>
-            <button type="button" class="btn btn-secondary btn-sm" onclick="downloadPdf()">⬇ Preuzmi</button>
-          </div>
-        </div>
-      </div>
+      <div id="docList"></div>
     </div>
 
     <div style="border-top:1px solid var(--border);margin-bottom:14px;padding-top:14px;font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:0.6px;font-weight:600;">Podaci prijevoza</div>
@@ -903,7 +890,7 @@
   <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--surface);border-bottom:1px solid var(--border);">
     <div style="font-weight:600;font-size:14px;">📄 Pregled dokumenta</div>
     <div style="display:flex;gap:8px;">
-      <button class="btn btn-secondary btn-sm" onclick="downloadPdf()">⬇ Preuzmi</button>
+      <button class="btn btn-secondary btn-sm" onclick="downloadDoc()">⬇ Preuzmi</button>
       <button class="btn btn-secondary btn-sm" onclick="closeDocPreview()">✕ Zatvori</button>
     </div>
   </div>
@@ -1291,7 +1278,10 @@ function renderTable() {
       </td>` : ''}
       <td>
         <div style="display:flex;gap:5px">
-          ${t.docUrl ? `<button class="btn btn-secondary btn-sm" onclick="window.open('${t.docUrl}','_blank')" title="Otvori dokument">📄</button>` : ''}
+          ${t.docUrl ? (() => {
+            const urls = String(t.docUrl).split(',').map(u => u.trim()).filter(Boolean);
+            return `<button class="btn btn-secondary btn-sm" onclick="openDocs('${urls.join('|')}')" title="Otvori dokument">📄${urls.length > 1 ? ' ' + urls.length : ''}</button>`;
+          })() : ''}
           <button class="btn btn-secondary btn-sm" onclick="openTransportModal(${origIdx})">✏️</button>
           <button class="btn btn-danger btn-sm" onclick="deleteTransport(${origIdx})">🗑</button>
         </div>
@@ -1349,16 +1339,22 @@ async function openTransportModal(idx = null) {
   sel.disabled = currentUser !== 'main';
   document.getElementById('naplacenRow').style.display = currentUser === 'main' ? '' : 'none';
 
-  document.getElementById('scanPreview').style.display = 'none';
   document.getElementById('scanStatus').className = 'scan-status';
   document.getElementById('scanInputImg').value = '';
   document.getElementById('scanInputGal').value = '';
   document.getElementById('scanInputPdf').value = '';
-  document.getElementById('docAttached').style.display = 'none';
-  docAttached = false;
-  docPdfBlob = null;
-  docDriveUrl = null;
-  docImageDataUrl = null;
+
+  // Učitaj već priložene dokumente (ako uređujemo postojeći prijevoz)
+  docs = [];
+  if (idx !== null && transports[idx].docUrl) {
+    docs = String(transports[idx].docUrl)
+      .split(',')
+      .map(u => u.trim())
+      .filter(Boolean)
+      .map(u => ({ url: u, dataUrl: null }));
+  }
+  renderDocs();
+
   document.getElementById('transportModal').classList.add('open');
 }
 
@@ -1369,10 +1365,27 @@ function prefillDriver() {
   }
 }
 
-let docAttached = false;
-let docPdfBlob = null;
-let docDriveUrl = null;
-let docImageDataUrl = null;
+// Priloženi dokumenti: [{ url, dataUrl|null }]
+let docs = [];
+
+function renderDocs() {
+  const el = document.getElementById('docList');
+  if (docs.length === 0) { el.innerHTML = ''; return; }
+  el.innerHTML = docs.map((d, i) => `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:var(--green);padding:7px 10px;margin-top:6px;background:rgba(52,211,153,0.1);border-radius:7px;border:1px solid rgba(52,211,153,0.2);">
+      <span>✓ Dokument ${i + 1}</span>
+      <div style="display:flex;gap:6px;">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="previewDoc(${i})">👁 Pregled</button>
+        <button type="button" class="btn btn-danger btn-sm" onclick="removeDoc(${i})">✕ Ukloni</button>
+      </div>
+    </div>`).join('');
+}
+
+function removeDoc(i) {
+  if (!confirm('Ukloniti ovaj dokument s prijevoza?\n\n(Datoteka ostaje u Google Drive mapi.)')) return;
+  docs.splice(i, 1);
+  renderDocs();
+}
 
 // Smanji sliku na maxSide piksela i komprimiraj u JPEG
 function compressImage(file, maxSide, quality) {
@@ -1414,13 +1427,7 @@ async function handleScan(event, type) {
   spinner.style.display = 'block';
   statusText.textContent = 'Učitavanje dokumenta...';
 
-  // Prikaži preview
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    document.getElementById('scanImg').src = e.target.result;
-    document.getElementById('scanPreview').style.display = 'block';
-  };
-  reader.readAsDataURL(file);
+  const isFirstDoc = docs.length === 0;
 
   try {
     // Smanji i komprimiraj sliku (fotografije s mobitela su prevelike za slanje)
@@ -1428,9 +1435,6 @@ async function handleScan(event, type) {
     const base64Full = await compressImage(file, 1600, 0.75);
     const base64 = base64Full.split(',')[1];
     const mediaType = 'image/jpeg';
-    docImageDataUrl = base64Full;
-    document.getElementById('scanImg').src = base64Full;
-    document.getElementById('scanPreview').style.display = 'block';
 
     // Spremi sliku na Google Drive
     statusText.textContent = 'Spremanje na Google Drive...';
@@ -1439,12 +1443,19 @@ async function handleScan(event, type) {
     const driveRes = await api('uploadDoc', { filename, base64, mimeType: mediaType });
     if (driveRes && driveRes.error) throw new Error('Drive: ' + driveRes.error);
     if (!driveRes || !driveRes.url) throw new Error('Drive nije vratio link.');
-    docDriveUrl = driveRes.url;
 
-    // Slika je spremljena – označi to odmah
-    docAttached = true;
-    document.getElementById('docAttached').style.display = 'block';
-    document.getElementById('docAttachedName').textContent = filename;
+    // Dodaj u listu priloženih dokumenata
+    docs.push({ url: driveRes.url, dataUrl: base64Full });
+    renderDocs();
+
+    // AI čita samo prvi dokument (da ne prepiše već unesene podatke)
+    if (!isFirstDoc) {
+      spinner.style.display = 'none';
+      status.className = 'scan-status show success';
+      statusText.textContent = '✓ Dokument dodan';
+      event.target.value = '';
+      return;
+    }
 
     // AI čita sliku (ako zakaže, slika ostaje spremljena)
     statusText.textContent = 'AI čita teretni list...';
@@ -1499,25 +1510,38 @@ Vrati SAMO JSON.` }
 }
 
 
-function previewDoc() {
-  const imgSrc = document.getElementById('scanImg').src;
-  if (!imgSrc) { alert('Nema dokumenta za pregled.'); return; }
-  document.getElementById('docPreviewImg').src = imgSrc;
-  const modal = document.getElementById('docPreviewModal');
-  modal.style.display = 'flex';
+function previewDoc(i) {
+  const d = docs[i];
+  if (!d) { alert('Nema dokumenta za pregled.'); return; }
+  // Slike učitane u ovoj sesiji prikaži u aplikaciji, ostale otvori na Driveu
+  if (d.dataUrl) {
+    document.getElementById('docPreviewImg').src = d.dataUrl;
+    document.getElementById('docPreviewModal').style.display = 'flex';
+  } else {
+    window.open(d.url, '_blank');
+  }
+}
+
+function openDocs(joined) {
+  const urls = String(joined).split('|').filter(Boolean);
+  urls.forEach(u => window.open(u, '_blank'));
 }
 
 function closeDocPreview() {
   document.getElementById('docPreviewModal').style.display = 'none';
 }
 
-function downloadPdf() {
-  if (!docImageDataUrl) { alert('Nema slike za preuzimanje.'); return; }
-  const name = document.getElementById('docAttachedName').textContent || 'teretni-list.jpg';
-  const a = document.createElement('a');
-  a.href = docImageDataUrl;
-  a.download = name;
-  a.click();
+function downloadDoc() {
+  const d = docs[0];
+  if (!d) return;
+  if (d.dataUrl) {
+    const a = document.createElement('a');
+    a.href = d.dataUrl;
+    a.download = 'teretni-list.jpg';
+    a.click();
+  } else {
+    window.open(d.url, '_blank');
+  }
 }
 
 function closeTransportModal() {
@@ -1538,7 +1562,7 @@ async function saveTransport() {
     povrat: document.getElementById('povratDa').classList.contains('active') ? 'da' : 'ne',
     povratOpis: document.getElementById('fPovratCars').value,
     note: document.getElementById('fNote').value.trim(),
-    docUrl: docDriveUrl || '',
+    docUrl: docs.map(d => d.url).join(','),
   };
 
   const err = document.getElementById('formError');
@@ -1549,7 +1573,7 @@ async function saveTransport() {
   }
 
   // Upozorenje ako nema dokumenta
-  if (!docAttached) {
+  if (docs.length === 0) {
     const potvrda = confirm('⚠️ Niste priložili Prijevozni teretni list.\n\nŽelite li svejedno nastaviti?');
     if (!potvrda) return;
   }
