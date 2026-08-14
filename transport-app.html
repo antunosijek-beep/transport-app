@@ -1281,7 +1281,7 @@ function renderTable() {
       <td style="text-align:center;font-weight:700;color:var(--accent)">${t.cars && t.cars!='0' ? t.cars : '–'}</td>
       <td>${t.driver||'–'}</td>
       ${isMain ? `<td><span class="badge-truck" style="background:${p.bg};color:${p.color}">${truckName}</span></td>` : ''}
-      <td>${t.povrat === 'da' ? `<span style="color:var(--yellow);font-weight:600">Da (${t.povratOpis || 1})</span>` : '<span style="color:var(--text2)">Ne</span>'}</td>
+      <td style="text-align:center">${t.povrat === 'da' ? `<span style="color:var(--yellow);font-weight:700">${t.povratOpis || 1}</span>` : '<span style="color:var(--text2)">–</span>'}</td>
       ${isMain ? `<td>
         <button onclick="toggleNaplacen(${origIdx})" class="naplacen-btn ${stClass}" title="Klikni za promjenu">
           ${stLabel}
