@@ -885,6 +885,17 @@
   </div>
 </div>
 
+<!-- MODAL: ODABIR DOKUMENTA -->
+<div class="modal-overlay" id="docsChooserModal">
+  <div class="modal" style="max-width:340px">
+    <div class="modal-title">📄 Priloženi dokumenti</div>
+    <div id="docsChooserList"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeDocsChooser()">Zatvori</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL: PREGLED DOKUMENTA -->
 <div id="docPreviewModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.95);z-index:500;flex-direction:column;">
   <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--surface);border-bottom:1px solid var(--border);">
@@ -1524,7 +1535,19 @@ function previewDoc(i) {
 
 function openDocs(joined) {
   const urls = String(joined).split('|').filter(Boolean);
-  urls.forEach(u => window.open(u, '_blank'));
+  if (urls.length === 0) return;
+  // Jedan dokument – otvori odmah
+  if (urls.length === 1) { window.open(urls[0], '_blank'); return; }
+  // Više dokumenata – ponudi popis (preglednik blokira više prozora odjednom)
+  const list = document.getElementById('docsChooserList');
+  list.innerHTML = urls.map((u, i) => `
+    <button class="btn btn-secondary" style="width:100%;justify-content:center;margin-bottom:8px"
+      onclick="window.open('${u}','_blank')">📄 Otvori dokument ${i + 1}</button>`).join('');
+  document.getElementById('docsChooserModal').classList.add('open');
+}
+
+function closeDocsChooser() {
+  document.getElementById('docsChooserModal').classList.remove('open');
 }
 
 function closeDocPreview() {
@@ -1959,7 +1982,7 @@ function exportPDF() {
 }
 
 // ─── CLOSE MODALS ON OVERLAY CLICK ───
-['transportModal','truckModal'].forEach(id => {
+['transportModal','truckModal','docsChooserModal'].forEach(id => {
   document.getElementById(id).addEventListener('click', function(e) {
     if (e.target === this) this.classList.remove('open');
   });
