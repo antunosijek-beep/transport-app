@@ -657,6 +657,12 @@
 
     <!-- TAB: PRIJEVOZI -->
     <div id="tab-pregled">
+      <div id="pendingBar" style="display:none;background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.35);border-radius:10px;padding:10px 14px;margin-bottom:14px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+          <span style="color:var(--yellow);font-size:13px;font-weight:600">⚠️ <span id="pendingCount"></span> (spremljeno na uređaj)</span>
+          <button class="btn btn-secondary btn-sm" onclick="flushPending(false)">↻ Pošalji sada</button>
+        </div>
+      </div>
       <div class="toolbar">
         <div class="toolbar-left">
           <input type="text" class="search-input" id="searchInput" placeholder="🔍 Pretraži..." oninput="renderTable()">
@@ -806,19 +812,21 @@
       </div>
     </div>
 
-    <!-- KAMION + NAPLAĆEN -->
-    <div class="form-grid">
-      <div class="form-row">
-        <label class="form-label">Kamion</label>
-        <select id="fTruck"></select>
+    <!-- KAMION -->
+    <div class="form-row">
+      <label class="form-label">Kamion</label>
+      <select id="fTruck"></select>
+    </div>
+
+    <!-- KONTROLA (samo Glavni) -->
+    <div class="form-row" id="naplacenRow">
+      <label class="form-label">Kontrola</label>
+      <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap;">
+        <button type="button" class="toggle-btn active" id="naplacenNe" onclick="setNaplacen('ne')">– Nije</button>
+        <button type="button" class="toggle-btn" id="naplacenDa" onclick="setNaplacen('da')">✓ Ispravan</button>
+        <button type="button" class="toggle-btn" id="naplacenProblem" onclick="setNaplacen('problem')">✗ Sporno</button>
       </div>
-      <div class="form-row" id="naplacenRow">
-        <label class="form-label">Naplaćen</label>
-        <div style="display:flex;gap:8px;margin-top:4px;">
-          <button type="button" class="toggle-btn active" id="naplacenNe" onclick="setNaplacen(false)">Ne</button>
-          <button type="button" class="toggle-btn" id="naplacenDa" onclick="setNaplacen(true)">Da ✓</button>
-        </div>
-      </div>
+      <input type="hidden" id="fNaplacen" value="ne">
     </div>
 
     <!-- VOZAČ -->
@@ -924,13 +932,24 @@ const PALETTE = [
 // ─── GOOGLE SHEETS BACKEND ───
 const API_URL = 'https://script.google.com/macros/s/AKfycbxRNn6FVLhSC2wPMnXEynffm4NzZCiHNGtVc6xMBARqthq-aXpC2SVs9GcKDTB77xwk/exec';
 
-async function api(action, body = {}) {
+async function api(action, body = {}, timeoutMs) {
   const url = `${API_URL}?action=${action}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    body: JSON.stringify({ action, ...body }),
-  });
-  return res.json();
+  const ms = timeoutMs || (action === 'uploadDoc' ? 60000 : 25000);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      body: JSON.stringify({ action, ...body }),
+      signal: ctrl.signal,
+    });
+    return await res.json();
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('Isteklo vrijeme čekanja – slaba veza.');
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ─── STATE ───
@@ -1054,6 +1073,8 @@ async function login(userId) {
   });
   updateStats();
   renderTable();
+  renderPendingBar();
+  flushPending(true);
 }
 
 function logout() {
@@ -1073,7 +1094,7 @@ async function showTab(name) {
     el.classList.toggle('active', names[i] === name);
   });
   if (name === 'kamioni') { await refreshData(); renderReport(); await loadTrucks(); renderTruckManage(); }
-  if (name === 'pregled') { await refreshData(); updateStats(); renderTable(); }
+  if (name === 'pregled') { await flushPending(true); await refreshData(); updateStats(); renderTable(); renderPendingBar(); }
 }
 
 async function refreshData() {
@@ -1091,6 +1112,47 @@ function visibleTransports() {
   return transports.filter(t => t.truckId === currentUser);
 }
 
+// ─── SORTIRANJE ───
+let sortState = { key: 'datetime', dir: 'desc' };
+
+function sortBy(key) {
+  if (sortState.key === key) {
+    sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortState.key = key;
+    sortState.dir = (key === 'datetime' || key === 'cars') ? 'desc' : 'asc';
+  }
+  renderTable();
+}
+
+function sortValue(t, key) {
+  switch (key) {
+    case 'datetime': return toDateInput(t.datetime) || '';
+    case 'cars': return parseInt(t.cars) || 0;
+    case 'povratOpis': return t.povrat === 'da' ? (parseInt(t.povratOpis) || 0) : -1;
+    case 'truck': {
+      const tr = trucks.find(x => x.id === t.truckId);
+      return (tr ? tr.name : t.truckId || '').toLowerCase();
+    }
+    case 'naplacen': {
+      const st = t.naplacen || 'ne';
+      return st === 'problem' ? 0 : st === 'ne' ? 1 : 2; // sporni prvi
+    }
+    default: return String(t[key] || '').toLowerCase();
+  }
+}
+
+function applySort(arr) {
+  const { key, dir } = sortState;
+  const mul = dir === 'asc' ? 1 : -1;
+  return arr.slice().sort((a, b) => {
+    const va = sortValue(a, key), vb = sortValue(b, key);
+    if (va < vb) return -1 * mul;
+    if (va > vb) return 1 * mul;
+    return 0;
+  });
+}
+
 // ─── FILTER ───
 function getFiltered() {
   const q = document.getElementById('searchInput').value.toLowerCase();
@@ -1098,7 +1160,7 @@ function getFiltered() {
   const fs = document.getElementById('filterStatus').value;
   const dFrom = document.getElementById('filterDateFrom').value;
   const dTo = document.getElementById('filterDateTo').value;
-  return visibleTransports().filter(t => {
+  const filtered = visibleTransports().filter(t => {
     const match = !q || (t.from||'').toLowerCase().includes(q) || (t.to||'').toLowerCase().includes(q) || (t.ptl||'').toLowerCase().includes(q) || (t.driver||'').toLowerCase().includes(q);
     const matchT = !ft || t.truckId === ft;
     const status = t.naplacen || 'ne';
@@ -1108,6 +1170,7 @@ function getFiltered() {
     const matchTo = !dTo || (d && d <= dTo);
     return match && matchT && matchS && matchFrom && matchTo;
   });
+  return applySort(filtered);
 }
 
 // ─── OBRAČUN (raspon datuma) ───
@@ -1232,16 +1295,21 @@ function rebuildTruckFilter() {
 function renderTable() {
   const isMain = currentUser === 'main';
 
-  // Build thead dynamically
+  // Build thead dynamically (klikom se sortira)
+  const th = (label, key, align) => {
+    const arrow = sortState.key === key ? (sortState.dir === 'asc' ? ' ▲' : ' ▼') : '';
+    const st = `cursor:pointer;user-select:none;${align ? 'text-align:' + align + ';' : ''}${sortState.key === key ? 'color:var(--accent);' : ''}`;
+    return `<th style="${st}" onclick="sortBy('${key}')">${label}${arrow}</th>`;
+  };
   document.getElementById('tableHead').innerHTML = `<tr>
-    <th>Datum</th>
-    <th>PTL</th>
-    <th>Ruta</th>
-    <th>Auta</th>
-    <th>Vozač</th>
-    ${isMain ? '<th>Kamion</th>' : ''}
-    <th>Povrat</th>
-    ${isMain ? '<th>Kontrola</th>' : ''}
+    ${th('Datum', 'datetime')}
+    ${th('PTL', 'ptl')}
+    ${th('Ruta', 'to')}
+    ${th('Auta', 'cars', 'center')}
+    ${th('Vozač', 'driver')}
+    ${isMain ? th('Kamion', 'truck') : ''}
+    ${th('Povrat', 'povratOpis', 'center')}
+    ${isMain ? th('Kontrola', 'naplacen') : ''}
     <th></th>
   </tr>`;
 
@@ -1273,6 +1341,8 @@ function renderTable() {
     const stLabel = st === 'da' ? '✓ Ispravan' : st === 'problem' ? '✗ Sporno' : '– Nije';
     const stClass = st === 'da' ? 'naplacen-da' : st === 'problem' ? 'naplacen-problem' : 'naplacen-ne';
     const rowBg = st === 'problem' ? 'background:rgba(248,113,113,0.07)' : st === 'da' ? 'background:rgba(52,211,153,0.05)' : '';
+    // Pregledane prijevoze vozač više ne može mijenjati
+    const locked = !isMain && st !== 'ne';
 
     return `<tr style="${isMain ? rowBg : ''}">
       <td class="mono" style="white-space:nowrap">${fmt(t.datetime)}</td>
@@ -1288,13 +1358,15 @@ function renderTable() {
         </button>
       </td>` : ''}
       <td>
-        <div style="display:flex;gap:5px">
+        <div style="display:flex;gap:5px;align-items:center">
           ${t.docUrl ? (() => {
             const urls = String(t.docUrl).split(',').map(u => u.trim()).filter(Boolean);
             return `<button class="btn btn-secondary btn-sm" onclick="openDocs('${urls.join('|')}')" title="Otvori dokument">📄${urls.length > 1 ? ' ' + urls.length : ''}</button>`;
           })() : ''}
-          <button class="btn btn-secondary btn-sm" onclick="openTransportModal(${origIdx})">✏️</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteTransport(${origIdx})">🗑</button>
+          ${locked
+            ? `<span title="Pregledano – izmjene više nisu moguće" style="color:var(--text2);font-size:14px">🔒</span>`
+            : `<button class="btn btn-secondary btn-sm" onclick="openTransportModal(${origIdx})">✏️</button>`}
+          ${isMain ? `<button class="btn btn-danger btn-sm" onclick="deleteTransport(${origIdx})">🗑</button>` : ''}
         </div>
       </td>
     </tr>`;
@@ -1303,6 +1375,14 @@ function renderTable() {
 
 // ─── TRANSPORT MODAL ───
 async function openTransportModal(idx = null) {
+  // Vozač ne smije mijenjati prijevoz koji je Glavni već pregledao
+  if (idx !== null && currentUser !== 'main') {
+    const st = transports[idx].naplacen || 'ne';
+    if (st !== 'ne') {
+      alert('🔒 Ovaj prijevoz je već pregledan i zaključan.\n\nAko treba ispravak, javi Glavnome.');
+      return;
+    }
+  }
   editTransportIdx = idx;
   document.getElementById('transportModalTitle').textContent = idx !== null ? 'Uredi prijevoz' : 'Novi prijevoz';
   document.getElementById('formError').style.display = 'none';
@@ -1333,7 +1413,7 @@ async function openTransportModal(idx = null) {
     document.getElementById('fDriver').value = t.driver || '';
     setCarPicker(t.cars || '0');
     setPovrat(t.povrat === 'da', t.povratOpis || '1');
-    setNaplacen(t.naplacen === 'da');
+    setNaplacen(t.naplacen || 'ne');
   } else {
     document.getElementById('fDatetime').value = new Date().toISOString().split('T')[0];
     buildLocationSelects('', '');
@@ -1342,7 +1422,7 @@ async function openTransportModal(idx = null) {
     sel.value = currentUser !== 'main' ? currentUser : (trucks[0] ? trucks[0].id : '');
     setCarPicker('0');
     setPovrat(false, '1');
-    setNaplacen(false);
+    setNaplacen('ne');
     prefillDriver();
   }
 
@@ -1572,15 +1652,19 @@ function closeTransportModal() {
 }
 
 async function saveTransport() {
+  const prev = editTransportIdx !== null ? transports[editTransportIdx] : null;
   const t = {
-    id: editTransportIdx !== null ? transports[editTransportIdx].id : 'tr_' + Date.now(),
+    id: prev ? prev.id : 'tr_' + Date.now(),
     datetime: document.getElementById('fDatetime').value,
     from: document.getElementById('fFrom').value.trim(),
     to: document.getElementById('fTo').value.trim(),
     ptl: document.getElementById('fPtl').value.trim(),
     cars: document.getElementById('fCars').value,
     truckId: document.getElementById('fTruck').value,
-    naplacen: document.getElementById('naplacenDa').classList.contains('active') ? 'da' : 'ne',
+    // Kontrolu smije mijenjati samo Glavni; vozaču se zatečena oznaka čuva
+    naplacen: currentUser === 'main'
+      ? document.getElementById('fNaplacen').value
+      : (prev ? (prev.naplacen || 'ne') : 'ne'),
     driver: document.getElementById('fDriver').value.trim(),
     povrat: document.getElementById('povratDa').classList.contains('active') ? 'da' : 'ne',
     povratOpis: document.getElementById('fPovratCars').value,
@@ -1595,6 +1679,20 @@ async function saveTransport() {
     return;
   }
 
+  // Upozorenje na dupli PTL
+  if (t.ptl) {
+    const dup = transports.find(x => x.id !== t.id && (x.ptl || '').trim().toLowerCase() === t.ptl.toLowerCase());
+    if (dup) {
+      const dupTruck = trucks.find(tr => tr.id === dup.truckId);
+      const poruka = `⚠️ PTL ${t.ptl} već postoji!\n\n` +
+        `Datum: ${fmt(dup.datetime)}\n` +
+        `Ruta: ${dup.from || '–'} → ${dup.to || '–'}\n` +
+        `Kamion: ${dupTruck ? dupTruck.name : dup.truckId}\n\n` +
+        `Želite li svejedno spremiti?`;
+      if (!confirm(poruka)) return;
+    }
+  }
+
   // Upozorenje ako nema dokumenta
   if (docs.length === 0) {
     const potvrda = confirm('⚠️ Niste priložili Prijevozni teretni list.\n\nŽelite li svejedno nastaviti?');
@@ -1604,20 +1702,87 @@ async function saveTransport() {
   closeTransportModal();
   showLoading('Spremanje...');
   try {
-    await api('saveTransport', { transport: t });
+    const res = await api('saveTransport', { transport: t });
+    if (res && res.error) throw new Error(res.error);
     await loadTransports(currentUser === 'main' ? null : currentUser);
-  } catch(e) { alert('Greška pri spremanju.'); }
+  } catch(e) {
+    // Slab signal – zadrži unos na uređaju umjesto da se izgubi
+    queuePending(t);
+    alert('⚠️ Nema veze sa serverom.\n\nUnos je spremljen na uređaj i bit će poslan čim veza proradi.');
+  }
   hideLoading();
   renderTable();
   updateStats();
+  renderPendingBar();
+}
+
+// ─── RED ČEKANJA (slab signal) ───
+function getPending() {
+  try { return JSON.parse(localStorage.getItem('tp_pending') || '[]'); } catch(e) { return []; }
+}
+
+function setPending(arr) {
+  localStorage.setItem('tp_pending', JSON.stringify(arr));
+}
+
+function queuePending(t) {
+  const arr = getPending().filter(x => x.id !== t.id);
+  arr.push(t);
+  setPending(arr);
+}
+
+function renderPendingBar() {
+  const bar = document.getElementById('pendingBar');
+  if (!bar) return;
+  const n = getPending().length;
+  if (n === 0) { bar.style.display = 'none'; return; }
+  bar.style.display = '';
+  document.getElementById('pendingCount').textContent =
+    n === 1 ? '1 unos nije poslan' : `${n} unosa nije poslano`;
+}
+
+async function flushPending(silent) {
+  let arr = getPending();
+  if (arr.length === 0) { renderPendingBar(); return; }
+  if (!silent) showLoading('Slanje spremljenih unosa...');
+  const ostali = [];
+  for (const t of arr) {
+    try {
+      const res = await api('saveTransport', { transport: t });
+      if (res && res.error) throw new Error(res.error);
+    } catch(e) {
+      ostali.push(t);
+    }
+  }
+  setPending(ostali);
+  try { await loadTransports(currentUser === 'main' ? null : currentUser); } catch(e) {}
+  if (!silent) hideLoading();
+  renderPendingBar();
+  renderTable();
+  updateStats();
+  if (!silent) {
+    if (ostali.length === 0) alert('✓ Svi unosi su poslani.');
+    else alert(`Još ${ostali.length} unosa čeka. Pokušaj ponovno kad budeš imao bolju vezu.`);
+  }
 }
 
 async function deleteTransport(idx) {
-  if (!confirm('Obriši ovaj prijevoz?')) return;
-  const id = transports[idx].id;
+  if (currentUser !== 'main') {
+    alert('Brisanje prijevoza može samo Glavni.\n\nAko je unos pogrešan, javi mu ili ga uredi.');
+    return;
+  }
+  const t = transports[idx];
+  const truck = trucks.find(tr => tr.id === t.truckId);
+  const poruka = 'Obrisati ovaj prijevoz?\n\n' +
+    `Datum: ${fmt(t.datetime)}\n` +
+    `PTL: ${t.ptl || '–'}\n` +
+    `Ruta: ${t.from || '–'} → ${t.to || '–'}\n` +
+    `Kamion: ${truck ? truck.name : t.truckId}\n\n` +
+    'Ovo se ne može poništiti.';
+  if (!confirm(poruka)) return;
   showLoading('Brisanje...');
   try {
-    await api('deleteTransport', { id });
+    await api('deleteTransport', { id: t.id });
     await loadTransports(currentUser === 'main' ? null : currentUser);
   } catch(e) { alert('Greška pri brisanju.'); }
   hideLoading();
@@ -1760,9 +1925,12 @@ function setCarPicker(val) {
 }
 
 // ─── KONTROLA (nepregledano / ispravan / sporno) ───
-function setNaplacen(isDa) {
-  document.getElementById('naplacenDa').classList.toggle('active', isDa);
-  document.getElementById('naplacenNe').classList.toggle('active', !isDa);
+function setNaplacen(val) {
+  const v = val === 'da' || val === 'problem' ? val : 'ne';
+  document.getElementById('naplacenNe').classList.toggle('active', v === 'ne');
+  document.getElementById('naplacenDa').classList.toggle('active', v === 'da');
+  document.getElementById('naplacenProblem').classList.toggle('active', v === 'problem');
+  document.getElementById('fNaplacen').value = v;
 }
 
 async function toggleNaplacen(idx) {
